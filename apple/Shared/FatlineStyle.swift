@@ -19,6 +19,9 @@ enum FatlineStyle {
     static let danger = Color(uiColor: .systemRed)
     #endif
 
+    /// The top of the plus, which is lit from above and ends in `action`.
+    static let actionLit = adaptive(light: 0x164631, dark: 0xD6E7DB)
+
     enum Weight: String {
         case regular = "Regular"
         case semibold = "SemiBold"
@@ -51,22 +54,42 @@ enum FatlineStyle {
     static let screenGutter: CGFloat = 32
     static let screenTop: CGFloat = 24
     static let screenBottom: CGFloat = 28
+    /// Link cards and pictures in posts.
+    static let cardRadius: CGFloat = 10
+    // Network marks: a rounded square with the network's first letter.
+    static let markRadiusRatio: CGFloat = 0.27
+    static let actionIconGap: CGFloat = 6
+    /// The floating plus over a feed.
+    static let plusSize: CGFloat = 48
+    /// The badge on an Activity row's avatar, and how far it hangs past the avatar's corner.
+    static let badgeSize: CGFloat = 16
+    static let badgeOverhang: CGFloat = 4
+    static let badgeGlyph = Font.system(size: 8, weight: .bold)
+    static let floatShadow = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(white: 0, alpha: 0.4) : NSColor(srgbRed: 10 / 255, green: 47 / 255, blue: 29 / 255, alpha: 0.2)
+    })
     #else
-    // Type scale: 34, 24, 16, and 13 only.
+    // Type scale: 34, 28, 24, 16, and 13 only. 28 is the title at the top of Home, Activity, and Settings.
     static let bodySize: CGFloat = 16
     static let display = font(34, .semibold, relativeTo: .largeTitle)
+    static let tabTitle = font(28, .semibold, relativeTo: .title)
     static let screenTitle = font(24, .semibold, relativeTo: .title2)
     static let body = font(bodySize)
     static let bodyStrong = font(bodySize, .semibold)
     static let meta = font(13, relativeTo: .footnote)
     static let metaStrong = font(13, .semibold, relativeTo: .footnote)
     static let bodyLineSpacing: CGFloat = 2
-    static let plusGlyph = Font.system(size: 23, weight: .semibold)
+    static let plusGlyph = Font.system(size: 22, weight: .medium)
+    /// The glyphs in the floating bar. Like a system bar's, they don't grow with Dynamic Type.
+    static let tabGlyph = Font.system(size: 22, weight: .medium)
+    /// The glyph at the start of a row in Settings, in the avatar's column.
+    static let rowGlyph = Font.system(size: 20, weight: .regular)
 
-    static let avatarSize: CGFloat = 32
+    static let avatarSize: CGFloat = 40
     static let avatarGap: CGFloat = 12
-    static let avatarTopInset: CGFloat = 3 // Aligns the avatar with the top of the username's letters.
-    static let rowPadding: CGFloat = 14
+    static let avatarTopInset: CGFloat = 4 // Puts the avatar's top just above the username's letters.
+    static let rowPadding: CGFloat = 12
     static let headerHeight: CGFloat = 44
     static let headerGap: CGFloat = 10
     static let compactButtonHeight: CGFloat = 32
@@ -77,11 +100,39 @@ enum FatlineStyle {
     static let screenGutter: CGFloat = 16
     static let screenTop: CGFloat = 12
     static let screenBottom: CGFloat = 12
-    /// The floating plus over a feed: its side and its gap to the bottom. A feed leaves `plusClearance`
-    /// under its last post, and its toast sits that far up, so neither is under the plus.
-    static let plusSize: CGFloat = 56
-    static let plusBottom: CGFloat = 20
-    static let plusClearance: CGFloat = 88
+    /// The floating bar: a glass capsule of tabs and the round plus beside it, on the gutter, this far
+    /// above the bottom of the screen. The capsule insets its tabs by `barInset`, so a selected tab's
+    /// capsule is concentric with it. Screens under the bar leave `gutter` above it.
+    static let barHeight: CGFloat = 64
+    static let barBottom: CGFloat = 24
+    static let barInset: CGFloat = 4
+    /// The picture that stands for Settings in the bar.
+    static let barPicture: CGFloat = 28
+    /// A screen's title once it has scrolled away: a glass capsule on the gutter with a mark inset 8.
+    static let titleCapsuleHeight: CGFloat = 48
+    static let titleCapsuleMark: CGFloat = 32
+    /// The badge on an Activity row's avatar, and how far it hangs past the avatar's corner.
+    static let badgeSize: CGFloat = 20
+    static let badgeOverhang: CGFloat = 4
+    static let badgeGlyph = Font.system(size: 10, weight: .bold)
+    /// The plus is as tall as the bar beside it.
+    static let plusSize = barHeight
+    /// How small a toast starts as it fades in, and how long a confirmation such as Sent stays up.
+    static let toastScale: CGFloat = 0.96
+    static let toastSeconds = 2.5
+    /// Rows in the Networks sheet, and the capsule behind the network showing, inset from the sheet's edges.
+    static let sheetRowHeight: CGFloat = 64
+    static let sheetRowInset: CGFloat = 8
+    /// Link cards, pictures in posts, and the quoted post in Activity.
+    static let cardRadius: CGFloat = 12
+    // Network marks: a rounded square with the network's first letter. 12 at 40 points.
+    static let markRadiusRatio: CGFloat = 0.3
+    static let actionIconGap: CGFloat = 8
+    /// Behind the tab that's showing, and the network that's showing in the Networks sheet.
+    static let selection = ink.opacity(0.08)
+    static let floatShadow = Color(uiColor: UIColor {
+        $0.userInterfaceStyle == .dark ? UIColor(white: 0, alpha: 0.4) : UIColor(red: 10 / 255, green: 47 / 255, blue: 29 / 255, alpha: 0.2)
+    })
     /// A sheet's header, such as the composer's, and the bar along its bottom.
     static let sheetHeaderHeight: CGFloat = 56
     static let sheetBarHeight: CGFloat = 52
@@ -106,20 +157,17 @@ enum FatlineStyle {
     // Reply and like. Each has a slot of its own width, so the heart stays put with a count or without.
     static let actionSlotWidth: CGFloat = 64
     static let actionSlotHeight: CGFloat = 20
-    static let actionIconGap: CGFloat = 6
     /// Below reply and like, so the icons end 11 above the divider like text does.
     static let actionsBottom: CGFloat = 8
     // Gaps in rows of controls and between a field and the controls under it.
     static let itemGap: CGFloat = 8
     static let groupGap: CGFloat = 12
+    /// Above a label that starts another group on the same screen, such as Your networks.
+    static let sectionGap: CGFloat = 24
     /// Bars at the bottom of a window, above and below their controls.
     static let barPadding: CGFloat = 12
     static let fieldInset: CGFloat = 14
     static let fieldRadius: CGFloat = 18
-    /// Link cards and pictures in posts.
-    static let cardRadius: CGFloat = 10
-    // Network marks: a rounded square with the network's first letter.
-    static let markRadiusRatio: CGFloat = 0.27
     static let markLetterRatio: CGFloat = 0.55
     /// The unread dot on a mark or the Activity button, with a paper ring so it reads on anything.
     static let unreadDot: CGFloat = 7

@@ -144,23 +144,23 @@ private struct FeedKeyboardScrolling: ViewModifier {
 }
 
 extension View {
-    /// Paper runs under the title bar, with the portal centered on it once the feed is showing.
+    /// Paper runs under the title bar, with the title centered on it once the feed is showing.
     /// Sign-in and the feed share this one title bar, so its height can't change between them.
-    func feedTitleBar(showsPortal: Bool) -> some View {
+    func feedTitleBar(showsTitle: Bool) -> some View {
         toolbar {
-            // The portal sits on the paper, so it doesn't take the toolbar's own background.
+            // The title sits on the paper, so it doesn't take the toolbar's own background.
             ToolbarItem(placement: .principal) {
-                // The portal, or a menu that switches networks once there are any.
-                TitleSwitcher(showsPortal: showsPortal)
-                    .accessibilityHidden(!showsPortal)
+                // Farcaster's mark or a network's, which opens the menu that switches between them.
+                TitleSwitcher(showsTitle: showsTitle)
+                    .accessibilityHidden(!showsTitle)
             }
             .sharedBackgroundVisibility(.hidden)
-            // Kept in place on sign-in too, hidden, for the same reason as the portal.
+            // Kept in place on sign-in too, hidden, for the same reason as the title.
             ToolbarItem(placement: .primaryAction) {
                 SettingsButton()
-                    .opacity(showsPortal ? 1 : 0)
-                    .disabled(!showsPortal)
-                    .accessibilityHidden(!showsPortal)
+                    .opacity(showsTitle ? 1 : 0)
+                    .disabled(!showsTitle)
+                    .accessibilityHidden(!showsTitle)
             }
             .sharedBackgroundVisibility(.hidden)
         }

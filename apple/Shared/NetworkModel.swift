@@ -24,7 +24,30 @@ final class NetworkModel {
     private(set) var lastRead: Date?
     /// You, as the selected network knows you.
     private(set) var you: NetworkMember?
-    var toast: String?
+    /// A confirmation, such as Sent. On iPhone it clears itself after a couple of seconds and is read out
+    /// once, whichever screen is showing. The Mac's own toast view clears it.
+    var toast: String? {
+        didSet {
+            #if os(iOS)
+            toastTimer?.cancel()
+            toastTimer = nil
+            guard let toast else { return }
+            Platform.announce(toast)
+            toastTimer = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(FatlineStyle.toastSeconds)) } catch { return }
+                guard let self, self.toast == toast else { return }
+                self.toast = nil
+            }
+            #endif
+        }
+    }
+    #if os(iOS)
+    @ObservationIgnored private var toastTimer: Task<Void, Never>?
+    #endif
+
+    /// Hosts whose Farcaster picture was tried this launch, so a picture that can't be read isn't
+    /// downloaded again at every refresh. One that failed is tried again next launch.
+    @ObservationIgnored private var picturesTried: Set<String> = []
 
     // What's new, by host: the newest post by someone else and the newest activity, against the
     // newest of each that was on screen. Seen times are kept, so a dot survives quitting.
@@ -103,6 +126,9 @@ final class NetworkModel {
     /// Whether any network other than the one showing has something new.
     var othersHaveNews: Bool { memberships.contains { $0.status == .approved && hasNews($0.host) } }
 
+    /// The newest reply or mention Activity has shown for the selected network. Anything after it is new.
+    var activitySeen: Int64? { selectedHost.flatMap { seenActivity[$0] } }
+
     func markActivitySeen() {
         guard let host = selectedHost, let newest = newestActivity[host] else { return }
         seenActivity[host] = newest
@@ -110,14 +136,16 @@ final class NetworkModel {
     }
 
     /// Records what a network has. The first look at a network counts as seen, so joining shows no dots.
-    private func note(_ host: String, posts: [NetworkPost], activity: [NetworkActivity.Item], fid: UInt64) {
+    /// Without `activity`, as after a read of the feed alone, what's known about Activity stays.
+    private func note(_ host: String, posts: [NetworkPost], activity: [NetworkActivity.Item]? = nil, fid: UInt64) {
         let newestPost = posts.first { $0.fid != fid }?.time ?? 0
-        let newestActivity = activity.first?.post.time ?? 0
         self.newestPost[host] = newestPost
-        self.newestActivity[host] = newestActivity
         if host == selectedHost || seenPosts[host] == nil { seenPosts[host] = max(newestPost, posts.first?.time ?? 0) }
-        if seenActivity[host] == nil { seenActivity[host] = newestActivity }
         UserDefaults.standard.set(seenPosts, forKey: Self.seenPostsKey)
+        guard let activity else { return }
+        let newestActivity = activity.first?.post.time ?? 0
+        self.newestActivity[host] = newestActivity
+        if seenActivity[host] == nil { seenActivity[host] = newestActivity }
         UserDefaults.standard.set(seenActivity, forKey: Self.seenActivityKey)
     }
 
@@ -163,12 +191,18 @@ final class NetworkModel {
     }
 
     /// Joins with an address or a `CODE@host` invite. Once in, it reads the network's name and size.
-    /// `avatar` is this account's Farcaster picture, when the app knows it, for the network to copy.
+    /// `avatar` is a link to this account's Farcaster picture, when the app knows it. The join doesn't
+    /// carry it: once signed in, this app uploads it, so the network fetches nothing.
     func join(typed: String, avatar: String? = nil) async throws -> JoinResult {
         guard let device else { throw NetworkError.notSignedIn }
         let (host, invite) = Self.parse(typed)
         guard let host else { throw NetworkError.server(status: 0, message: "Use the format server.example or CODE@server.example.") }
-        var membership = try await NetworkClient.join(host: host, device: device, invite: invite, avatar: avatar)
+        var membership = try await NetworkClient.join(host: host, device: device, invite: invite)
+        membership.farcasterPicture = avatar
+        #if DEBUG
+        // `-FatlineFarcasterPicture URL` stands in for a made-up demo account's Farcaster picture.
+        membership.farcasterPicture = avatar ?? UserDefaults.standard.string(forKey: "FatlineFarcasterPicture")
+        #endif
         if membership.status == .approved { membership = try await NetworkClient(membership: membership).signIn() }
         var result = JoinResult(host: host, status: membership.status)
         if membership.status == .approved {
@@ -184,7 +218,24 @@ final class NetworkModel {
             result.memberCount = try? await client.members().count
         }
         try add(membership)
+        // Behind the result, since the picture is an extra.
+        if membership.status == .approved { Task { await sendFarcasterPicture(host) } }
         return result
+    }
+
+    /// Uploads the Farcaster picture a join left to send, once the network has let this account in.
+    private func sendFarcasterPicture(_ host: String) async {
+        guard let link = memberships.first(where: { $0.host == host && $0.status == .approved })?.farcasterPicture,
+              !picturesTried.contains(host) else { return }
+        picturesTried.insert(host)
+        let sent = try? await signedIn(host) { await NetworkPreviews.sendFarcasterPicture(link, client: $0) }
+        guard let member = sent ?? nil, var membership = memberships.first(where: { $0.host == host }), membership.farcasterPicture == link else { return }
+        membership.farcasterPicture = nil
+        _ = try? update(membership)
+        if host == selectedHost {
+            you = member
+            await refresh()
+        }
     }
 
     /// For a network that's waiting on the admin: asks whether they've decided.
@@ -193,7 +244,10 @@ final class NetworkModel {
         do {
             let updated = try await NetworkClient(membership: membership).signIn()
             guard try update(updated) else { return }
-            if updated.status == .approved { await refresh() }
+            if updated.status == .approved {
+                await refresh()
+                await sendFarcasterPicture(host)
+            }
         } catch {
             problem = error.localizedDescription
         }
@@ -254,6 +308,22 @@ final class NetworkModel {
                 membership.icon = info.icon
                 _ = try? update(membership)
             }
+        } catch {
+            guard host == selectedHost else { return }
+            problem = error.localizedDescription
+        }
+    }
+
+    /// Reads the feed alone, after a post, like, or delete of yours, which change nothing else here.
+    /// One read where `refresh` makes four, since a network allows each member only so many a minute.
+    private func refreshFeed() async {
+        guard let host = selectedHost, let membership = selected, membership.status == .approved else { return }
+        do {
+            let feed = try await signedIn(host) { try await $0.feed() }
+            guard host == selectedHost else { return }
+            posts = feed
+            problem = nil
+            note(host, posts: feed, fid: membership.fid)
         } catch {
             guard host == selectedHost else { return }
             problem = error.localizedDescription
@@ -339,14 +409,23 @@ final class NetworkModel {
             let uploaded = try await signedIn(membership.host) { try await $0.upload(data, type: type) }
             embeds.append(.link(uploaded.url))
         }
-        if let link, embeds.count < NetworkMessages.maxEmbeds { embeds.append(.link(link)) }
+        let links = link.flatMap { embeds.count < NetworkMessages.maxEmbeds ? [$0] : nil } ?? []
+        embeds += links.map(NetworkMessages.Embed.link)
         let message = try NetworkMessages.post(fid: membership.fid, text: text, handles: handles, embeds: embeds,
                                                parent: parent.map { ($0.fid, $0.hash) }, key: membership.signingKey)
-        // The network it was signed for, even if another was chosen while pictures went up.
-        try await signedIn(membership.host) { try await $0.submit(message) }
+        // The network it was signed for, even if another was chosen while pictures went up. With a
+        // link, this app reads the page itself and the network reads nothing.
+        try await signedIn(membership.host) { try await $0.submit(message, readsLinks: !links.isEmpty) }
         toast = parent == nil ? "Sent" : "Replied"
-        // The post is in. The composer closes now, and the feed catches up behind it.
-        Task { await refresh() }
+        // The post is in. The composer closes now, and the feed catches up behind it, then again once
+        // the link's preview is there. A preview that fails leaves the post as it is.
+        Task { await refreshFeed() }
+        guard !links.isEmpty else { return }
+        let hash = message.hash
+        Task {
+            _ = try? await signedIn(host) { await NetworkPreviews.send(links: links, hash: hash, client: $0) }
+            if host == selectedHost { await refreshFeed() }
+        }
     }
 
     func toggleLike(_ post: NetworkPost) async {
@@ -354,7 +433,7 @@ final class NetworkModel {
         do {
             let message = try NetworkMessages.like(!post.liked, fid: membership.fid, target: (post.fid, post.hash), key: membership.signingKey)
             try await signedIn(membership.host) { try await $0.submit(message) }
-            await refresh()
+            await refreshFeed()
         } catch {
             problem = error.localizedDescription
         }
@@ -365,7 +444,7 @@ final class NetworkModel {
         let message = try NetworkMessages.removal(fid: membership.fid, target: post.hash, key: membership.signingKey)
         try await signedIn(membership.host) { try await $0.submit(message) }
         toast = "Deleted"
-        await refresh()
+        await refreshFeed()
     }
 
     func adminLink() async throws -> URL {

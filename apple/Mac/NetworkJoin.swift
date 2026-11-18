@@ -103,6 +103,8 @@ struct GettingStarted: View {
                         switch choice {
                         case .farcaster: path.append(Connection.isSetByLaunch ? .signIn : .connection(.neynar))
                         case .network: path.append(.address)
+                        // The Mac lists no networks here: its title switches between them.
+                        case .existing(let host): state.networks.select(host)
                         }
                     }
                 case .connection(let kind):

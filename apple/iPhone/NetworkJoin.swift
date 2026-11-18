@@ -5,7 +5,9 @@ import SwiftUI
 
 /// Setup on iPhone: the splash, then Farcaster or a private network. Farcaster goes on to how this
 /// iPhone reaches it and the recovery phrase; a private network to its address, the confirm step, the
-/// phrase if this iPhone has no key yet, and where joining left things.
+/// phrase if this iPhone has no key yet, and where joining left things. With networks already on this
+/// iPhone the splash is the same, and the second step lists them too, which is the way back to one
+/// while Farcaster isn't set up.
 struct GettingStarted<SignIn: View>: View {
     private enum Step: Hashable {
         case choose
@@ -16,8 +18,6 @@ struct GettingStarted<SignIn: View>: View {
     }
 
     let session: PostingSession
-    /// Opens the Networks sheet from the splash, once this iPhone has a network.
-    let switchNetwork: (() -> Void)?
     @ViewBuilder let signIn: () -> SignIn
 
     @Environment(NetworkModel.self) private var networks
@@ -28,19 +28,15 @@ struct GettingStarted<SignIn: View>: View {
     var body: some View {
         NavigationStack(path: $path) {
             WelcomeSplash(session: session) { path = [.choose] }
-                .overlay(alignment: .top) {
-                    // With a network on this iPhone, the way back to it while Farcaster isn't set up.
-                    if let switchNetwork {
-                        NetworkTitleButton(membership: nil, othersHaveNews: networks.othersHaveNews, action: switchNetwork)
-                    }
-                }
                 .navigationDestination(for: Step.self) { step in
                     switch step {
                     case .choose:
-                        NetworkSetupChoiceStep(choice: $choice) {
+                        NetworkSetupChoiceStep(choice: $choice, networks: networks.memberships) {
                             switch choice {
                             case .farcaster: path.append(Connection.isSetByLaunch ? .signIn : .connection(.neynar))
                             case .network: path.append(.address)
+                            // The network takes over from setup.
+                            case .existing(let host): networks.select(host)
                             }
                         }
                     case .connection(let kind):

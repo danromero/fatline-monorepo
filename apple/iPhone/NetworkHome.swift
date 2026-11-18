@@ -1,94 +1,155 @@
 import SwiftUI
 import UIKit
 
-// A Fatline network on iPhone: its feed under a bar whose title switches networks. Farcaster's own
-// feed is unchanged and shows when no network is selected.
+// A Fatline network on iPhone: its feed, Activity, and Settings under the floating bar, with the
+// network's name at the top of the feed switching networks. Farcaster's own feed shows when no
+// network is selected.
 
-/// Where a network's screen has gone from its feed.
+/// Where a network's feed or Activity has gone from its first screen.
 enum NetworkRoute: Hashable {
     case thread(NetworkPost)
-    case activity
 }
 
-/// A network's feed, or where it stands while the admin decides.
+/// Where Settings has gone.
+enum NetworkSettingsRoute: Hashable {
+    case profile, members
+}
+
+/// A network's screens, or where it stands while the admin decides.
 struct NetworkHome: View {
     let membership: NetworkMembership
     /// Opens the Networks sheet.
     let switchNetwork: () -> Void
 
     @Environment(NetworkModel.self) private var model
+    @State private var tab = FatlineTab.home
+    /// Tabs that have shown. A tab's screen is made the first time it shows, and then kept.
+    @State private var opened: Set<FatlineTab> = [.home]
     @State private var path: [NetworkRoute] = []
+    @State private var activityPath: [NetworkRoute] = []
+    @State private var settingsPath: [NetworkSettingsRoute] = []
     @State private var composing = false
-    @State private var showSettings = false
+    @State private var stage = ScrollStage.top
+
+    private var approved: Bool { membership.status == .approved }
+    private var handle: String { model.you?.handle ?? model.handle(for: membership.fid) }
+    private var picture: URL? { model.you?.avatar.flatMap { FeedCast.networkMediaURL($0, host: membership.host) } }
+
+    /// The bar shows on each tab's first screen, and a pushed screen has the whole height.
+    private var atRoot: Bool {
+        switch tab {
+        case .home: path.isEmpty
+        case .activity: activityPath.isEmpty
+        case .settings: settingsPath.isEmpty
+        }
+    }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                bar
-                FatlineDivider()
-                switch membership.status {
-                case .approved:
-                    feed
-                case .pending:
-                    NetworkStatusView(status: .pending, host: membership.host, button: "Check Again") {
-                        Platform.haptic(.tap)
-                        Task { await model.checkAgain(membership.host) }
-                    }
-                case .refused:
-                    NetworkStatusView(status: .refused, host: membership.host, button: "Remove from This iPhone") {
-                        model.forget(membership.host)
-                    }
+        FatlineTabShell(
+            tab: $tab, tabs: approved ? [.home, .activity, .settings] : [.home, .settings], showsBar: atRoot,
+            activityIsNew: model.hasNewActivity, picture: picture, handle: handle,
+            compose: approved ? { composing = true } : nil
+        ) {
+            ZStack {
+                home.tabPage(.home, showing: tab)
+                if approved, opened.contains(.activity) || tab == .activity {
+                    activity.tabPage(.activity, showing: tab)
                 }
-            }
-            .background(FatlineStyle.paper.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: NetworkRoute.self) { route in
-                switch route {
-                case .thread(let post): NetworkThreadView(post: post)
-                case .activity: NetworkActivityView { path.append(.thread($0)) }
+                if opened.contains(.settings) || tab == .settings {
+                    settings.tabPage(.settings, showing: tab)
                 }
             }
         }
+        .onChange(of: tab) { _, tab in opened.insert(tab) }
+        .background(FatlineStyle.paper.ignoresSafeArea())
         .foregroundStyle(FatlineStyle.ink)
         .tint(FatlineStyle.action)
         // This view lasts as long as its network shows, so the composer posts to the one it opened on.
-        .sheet(isPresented: $showSettings) {
-            NetworkSettingsSheet(membership: membership)
-        }
         .sheet(isPresented: $composing) {
             NetworkComposer(host: membership.host)
                 .tint(FatlineStyle.action)
         }
     }
 
-    /// The title in the middle, as in the Farcaster feed's header, with Activity at the leading edge once
-    /// the network has let you in.
-    private var bar: some View {
-        NetworkTitleButton(membership: membership, othersHaveNews: model.othersHaveNews, action: switchNetwork)
-            .frame(maxWidth: .infinity, minHeight: FatlineStyle.headerHeight)
-            .overlay(alignment: .leading) {
-                if membership.status == .approved {
-                    // The 20-point tray is centered in its 44-point target, which puts its edge on the gutter.
-                    NetworkActivityButton { path.append(.activity) }
-                        .padding(.leading, FatlineStyle.gutter - FatlineStyle.groupGap)
+    private var home: some View {
+        NavigationStack(path: $path) {
+            Group {
+                switch membership.status {
+                case .approved:
+                    feed
+                case .pending:
+                    waiting(NetworkStatusView(status: .pending, host: membership.host, button: "Check Again") {
+                        Platform.haptic(.tap)
+                        Task { await model.checkAgain(membership.host) }
+                    })
+                case .refused:
+                    waiting(NetworkStatusView(status: .refused, host: membership.host, button: "Remove from This iPhone") {
+                        model.forget(membership.host)
+                    })
                 }
             }
-            .overlay(alignment: .trailing) {
-                Button { showSettings = true } label: {
-                    Image(systemName: "ellipsis")
-                        .font(FatlineStyle.markGlyph)
-                        .foregroundStyle(FatlineStyle.secondary)
-                        .frame(width: FatlineStyle.buttonHitHeight, height: FatlineStyle.buttonHitHeight)
-                        .contentShape(.rect)
+            .underBar()
+            .background(FatlineStyle.paper.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: NetworkRoute.self) { route in
+                switch route {
+                case .thread(let post): NetworkThreadView(post: post)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Settings")
-                .accessibilityIdentifier("network-settings")
-                // As in the Farcaster feed: the 15-point glyph is centered in its 44-point target, which puts
-                // its edge on the gutter.
-                .padding(.trailing, 1.5) // layout-ok: matches the Farcaster feed's three dots
             }
-            .padding(.bottom, FatlineStyle.headerGap)
+        }
+    }
+
+    private var activity: some View {
+        NavigationStack(path: $activityPath) {
+            NetworkActivityView(membership: membership, showing: tab == .activity) { activityPath.append(.thread($0)) }
+                .underBar()
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: NetworkRoute.self) { route in
+                    switch route {
+                    case .thread(let post): NetworkThreadView(post: post)
+                    }
+                }
+        }
+    }
+
+    private var settings: some View {
+        NavigationStack(path: $settingsPath) {
+            NetworkSettingsView(membership: membership) { settingsPath.append($0) }
+                .underBar()
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: NetworkSettingsRoute.self) { route in
+                    switch route {
+                    case .profile: NetworkProfileView()
+                    case .members: NetworkMembersView()
+                    }
+                }
+        }
+        // Mute and Saved happen in here, so their toasts show here too.
+        .overlay(alignment: .bottom) { NetworkToastHost().underBar() }
+    }
+
+    /// The network's name, where the feed's is, over the screen for a network that hasn't let you in.
+    /// Nothing a network says about itself shows before it does, so the title is its address.
+    private func waiting(_ status: NetworkStatusView) -> some View {
+        VStack(spacing: 0) {
+            ScreenHeader(title: membership.host, news: model.othersHaveNews, actionLabel: switchLabel, action: switchNetwork) {
+                NetworkWaitingMark()
+            }
+            CastDivider()
+            status
+        }
+    }
+
+    private var switchLabel: String {
+        "\(approved ? membership.label : membership.host). Switch network" + (model.othersHaveNews ? ", news in another network" : "")
+    }
+
+    /// The network's address and how many are in it, under its name. The address always shows, so a
+    /// network can't pass for another.
+    private var meta: String {
+        let count = model.members.count
+        let members = count == 0 ? nil : count == 1 ? "1 member" : "\(count) members"
+        return [membership.host, members].compactMap(\.self).joined(separator: " · ")
     }
 
     private var feed: some View {
@@ -102,13 +163,17 @@ struct NetworkHome: View {
             }
             ScrollView {
                 LazyVStack(spacing: 0) {
+                    ScreenHeader(title: membership.title, meta: meta, news: model.othersHaveNews, actionLabel: switchLabel, action: switchNetwork) {
+                        NetworkMark(name: membership.title, icon: membership.icon)
+                    }
+                    CastDivider()
                     ForEach(model.posts) { post in
                         NetworkPostRow(post: post) { path.append(.thread(post)) }
                         if post.id != model.posts.last?.id { CastDivider() }
                     }
                 }
-                .padding(.bottom, FatlineStyle.plusClearance)
             }
+            .scrollStage($stage)
             .overlay {
                 if model.posts.isEmpty {
                     Text(emptyMessage)
@@ -120,10 +185,11 @@ struct NetworkHome: View {
                 }
             }
             .refreshable { await model.refresh() }
-            .overlay(alignment: .bottom) {
-                NetworkToastHost().padding(.bottom, FatlineStyle.plusClearance)
+            .overlay(alignment: .bottom) { NetworkToastHost() }
+            .scrollFade(stage)
+            .titleCapsule(membership.title, news: model.othersHaveNews, label: switchLabel, shown: stage == .past, action: switchNetwork) {
+                NetworkMark(name: membership.title, icon: membership.icon, size: FatlineStyle.titleCapsuleMark)
             }
-            .overlay(alignment: .bottomTrailing) { ComposeButton { composing = true } }
         }
     }
 
@@ -134,26 +200,29 @@ struct NetworkHome: View {
     }
 }
 
-/// The network's confirmations, such as Sent, in the Farcaster feed's toast. Each clears after four
-/// seconds, as there.
+/// The network's confirmations, such as Sent, in the Farcaster feed's toast. The model clears each
+/// after a couple of seconds. The toast fades out in place rather than being taken away, so a screen that
+/// changes while it goes can't leave it behind.
 struct NetworkToastHost: View {
     @Environment(NetworkModel.self) private var model
+    /// The last toast, which stays to fade out.
+    @State private var last: String?
 
     var body: some View {
+        let shown = model.toast
         ZStack {
-            if let toast = model.toast {
-                FeedToastView(toast: PostToast(detail: nil, confirmation: toast))
+            if let text = shown ?? last {
+                FeedToastView(toast: PostToast(detail: nil, confirmation: text))
                     .padding(.horizontal, FatlineStyle.gutter)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-                    .task(id: toast) {
-                        Platform.announce(toast)
-                        do { try await Task.sleep(for: .seconds(4)) } catch { return }
-                        if model.toast == toast { model.toast = nil }
-                    }
+                    .toastPresence(shown != nil)
+                    .transition(Platform.reduceMotion ? .opacity : .toast)
             }
         }
-        .animation(Platform.reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.toast)
+        .allowsHitTesting(false)
+        .animation(.snappy(duration: 0.28), value: shown ?? last)
+        .onChange(of: shown, initial: true) { _, new in
+            if let new { last = new }
+        }
     }
 }
 
@@ -192,10 +261,15 @@ struct NetworkPostRow: View {
     private var handle: String { model.handle(for: post.fid) }
     private var isOwn: Bool { post.fid == model.ownFID }
     private var replyAction: (() -> Void)? { reply ?? open }
+    /// In the feed a reply says whose post it answers. Under that post it needn't.
+    private var replyingTo: String? {
+        guard place == .feed, post.parent != nil, let fid = post.parentFid else { return nil }
+        return model.handle(for: fid)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CastRow(cast: model.cast(for: post), handle: model.handle(for: post.fid), bottomInset: 0)
+            CastRow(cast: model.cast(for: post), handle: model.handle(for: post.fid), bottomInset: 0, replyingTo: replyingTo)
             ForEach(model.linkCards(for: post)) { card in
                 NetworkLinkCard(card: card)
                     .padding(.leading, FatlineStyle.textColumn)
@@ -377,7 +451,9 @@ struct NetworkThreadView: View {
     @State private var host: String?
     @FocusState private var replyFocused: Bool
 
-    private var shown: NetworkPost { root ?? post }
+    /// The post whose replies these are. Opened from a reply in the feed, it's the post that reply
+    /// answers, which shows once it's read.
+    private var shown: NetworkPost? { root ?? (post.parent == nil ? post : nil) }
     private var canSend: Bool {
         !sending && host != nil && !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && NetworkMessages.characterCount(reply) <= NetworkMessages.maxCharacters
@@ -389,12 +465,14 @@ struct NetworkThreadView: View {
             ScrollViewReader { scroller in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        if shown.deleted {
-                            NetworkDeletedRow()
-                        } else {
-                            NetworkPostRow(post: shown, place: .root, reply: { replyFocused = true }, liked: load)
+                        if let shown {
+                            if shown.deleted {
+                                NetworkDeletedRow()
+                            } else {
+                                NetworkPostRow(post: shown, place: .root, reply: { replyFocused = true }, liked: load)
+                            }
+                            FatlineDivider()
                         }
-                        FatlineDivider()
                         if let failure {
                             FeedMessage(text: failure, color: FatlineStyle.danger)
                         } else if loaded && replies.isEmpty {
@@ -419,7 +497,7 @@ struct NetworkThreadView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !shown.deleted { replyBar }
+            if let shown, !shown.deleted { replyBar }
         }
         .foregroundStyle(FatlineStyle.ink)
         .background(FatlineStyle.paper.ignoresSafeArea())
@@ -440,7 +518,7 @@ struct NetworkThreadView: View {
     }
 
     private func send() {
-        guard canSend, let host else { return }
+        guard canSend, let host, let shown else { return }
         Platform.haptic(.tap)
         sending = true
         sendFailure = nil
@@ -460,7 +538,7 @@ struct NetworkThreadView: View {
 
     private func load() async {
         do {
-            let thread = try await model.thread(post.hash)
+            let thread = try await model.thread(post.parent ?? post.hash)
             root = thread.post
             replies = thread.replies
             failure = nil

@@ -65,6 +65,21 @@ struct NetworkMark: View {
     }
 }
 
+/// Farcaster's own mark, where a network's mark goes. The portal is Fatline's, and Fatline is the
+/// app, not a network.
+struct FarcasterMark: View {
+    var size = FatlineStyle.avatarSize
+
+    var body: some View {
+        Image("Farcaster")
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size, height: size)
+            .clipShape(.rect(cornerRadius: size * FatlineStyle.markRadiusRatio, style: .continuous))
+            .accessibilityHidden(true)
+    }
+}
+
 extension View {
     /// The unread dot at the top trailing corner, `inset` in from it.
     func unreadDot(_ shown: Bool, inset: CGFloat) -> some View {

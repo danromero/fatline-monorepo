@@ -40,6 +40,20 @@ describe("posting", () => {
     assert.deepEqual(carols.items.map((item) => [item.kind, item.post.hash, item.parent]), [["mention", dinner, null]]);
   });
 
+  test("the feed has replies when an app asks, each naming whom it answers", async () => {
+    const withReplies = async () => (await as(alice).feed(undefined, { replies: true })).posts;
+    const found = findPost(await withReplies(), reply)!;
+    assert.deepEqual([found.text, found.parent, found.parentFid], ["In!", dinner, bob.fid]);
+    assert.equal(findPost(await withReplies(), dinner)!.parentFid, null);
+    await as(alice).mute(carol.fid);
+    assert.ok(!findPost(await withReplies(), reply), "a muted member's reply stays out");
+    await as(alice).unmute(carol.fid);
+    await as(alice).mute(bob.fid);
+    assert.ok(!findPost(await withReplies(), reply), "and so does a reply to a muted member");
+    await as(alice).unmute(bob.fid);
+    assert.ok(findPost(await withReplies(), reply));
+  });
+
   test("a quote and a link travel as embeds", async () => {
     quote = await as(alice).post({ text: "Bring wine", embeds: [{ post: { fid: bob.fid, hash: dinner } }, { url: "https://example.com/menu" }] });
     const post = findPost((await as(bob).feed()).posts, quote)!;

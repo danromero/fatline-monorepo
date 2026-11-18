@@ -133,8 +133,9 @@ export class NetworkClient {
     return this.request<NetworkInfo>("GET", "/network");
   }
 
-  feed(cursor?: string) {
-    return this.request<FeedPage>("GET", "/feed" + query({ cursor }));
+  /** The feed's posts, or with `replies` its posts and replies. */
+  feed(cursor?: string, options: { replies?: boolean } = {}) {
+    return this.request<FeedPage>("GET", "/feed" + query({ cursor, replies: options.replies ? "1" : undefined }));
   }
 
   thread(hash: string) {

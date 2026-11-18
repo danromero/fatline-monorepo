@@ -5,7 +5,7 @@ import SwiftUI
 /// screen it says where you are instead.
 struct TitleSwitcher: View {
     @Environment(AppState.self) private var state
-    let showsPortal: Bool
+    let showsTitle: Bool
 
     @State private var anchor = MenuAnchor()
     @State private var open = false
@@ -13,9 +13,9 @@ struct TitleSwitcher: View {
     private var networks: NetworkModel { state.networks }
 
     var body: some View {
-        if !showsPortal {
+        if !showsTitle {
             // Holds the title bar's height through setup, where nothing shows in it.
-            Self.portal(size: FatlineStyle.avatarSize).opacity(0)
+            FarcasterMark().opacity(0)
         } else if let route = state.networkPath.last, let selected = networks.selected {
             switch route {
             case .thread:
@@ -41,7 +41,6 @@ struct TitleSwitcher: View {
     }
 
     private static let markSize: CGFloat = 22 // layout-ok: the mark is a 22-point tile in a 32-point button
-    private static let portalSize: CGFloat = 24 // layout-ok: the portal's circle reads as large as the tile
 
     @ViewBuilder private var label: some View {
         let dot = networks.othersHaveNews
@@ -50,7 +49,8 @@ struct TitleSwitcher: View {
                 NetworkMark(name: selected.title, icon: selected.icon, size: Self.markSize, dot: dot)
                 Text(verbatim: selected.title).font(FatlineStyle.bodyStrong)
             } else {
-                Self.portal(size: Self.portalSize).unreadDot(dot, inset: 0)
+                // Farcaster's own mark, as a network's: the portal is Fatline's.
+                FarcasterMark(size: Self.markSize).unreadDot(dot, inset: -3) // layout-ok: the dot sits over the mark's corner
             }
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .bold)) // layout-ok: a disclosure glyph, as in system menus
@@ -58,14 +58,6 @@ struct TitleSwitcher: View {
                 .accessibilityHidden(true)
         }
         .foregroundStyle(FatlineStyle.ink)
-    }
-
-    static func portal(size: CGFloat) -> some View {
-        Image("Portal")
-            .resizable()
-            .frame(width: size, height: size)
-            .clipShape(.circle)
-            .accessibilityLabel("Fatline feed")
     }
 
     private func showMenu() {
@@ -78,7 +70,7 @@ struct TitleSwitcher: View {
     private func menu() -> NSMenu {
         var items: [NSMenuItem] = []
         let farcaster = ClosureMenuItem("Farcaster", key: "1") { networks.select(nil) }
-        farcaster.image = NetworkMenuImage.portal()
+        farcaster.image = NetworkMenuImage.farcaster()
         farcaster.state = networks.selectedHost == nil ? .on : .off
         items.append(farcaster)
         for (index, membership) in networks.memberships.enumerated() {
@@ -186,10 +178,10 @@ enum NetworkMenuImage {
         }
     }
 
-    static func portal() -> NSImage {
+    static func farcaster() -> NSImage {
         NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            NSBezierPath(ovalIn: rect).addClip()
-            NSImage(named: "Portal")?.draw(in: rect)
+            NSBezierPath(roundedRect: rect, xRadius: size * FatlineStyle.markRadiusRatio, yRadius: size * FatlineStyle.markRadiusRatio).addClip()
+            NSImage(named: "Farcaster")?.draw(in: rect)
             return true
         }
     }

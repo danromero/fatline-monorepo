@@ -43,6 +43,8 @@ export interface Post {
   text: string;
   mentions: { fid: number; username: string }[];
   parent: string | null;
+  /** Who wrote the post a reply answers, or null for a post. */
+  parentFid: number | null;
   embeds: PostEmbed[];
   replies: number;
   likes: number;

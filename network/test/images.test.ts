@@ -181,6 +181,28 @@ describe("images", () => {
     assert.equal((await load(preview.image!)).status, 404);
   });
 
+  test("a member whose app sent no picture gets the one Farcaster has", async () => {
+    const farcaster = fixture.network.farcaster;
+    const picture = async (fid: number) => (await as(alice).members()).find((member) => member.fid === fid)?.avatar;
+
+    // Approved from Requests, having asked with no picture.
+    const hugo = newPerson(1008, "hugo");
+    farcaster.pictures.set(hugo.fid, "https://pictures.example/test/avatar.png");
+    assert.equal(await joined(hugo), "pending");
+    assert.ok(!farcaster.pictureAsked.includes(hugo.fid), "not while they wait");
+    await as(alice).approve(hugo.fid);
+    assert.equal((await load(await eventually(() => picture(hugo.fid)), "image/png")).status, 200);
+
+    // In with a code while Farcaster had no picture for them: the hourly check finds the one they set later.
+    const iris = newPerson(1009, "iris");
+    assert.equal(await joined(iris, (await as(alice).createInvite()).code), "approved");
+    await eventually(async () => farcaster.pictureAsked.includes(iris.fid));
+    assert.equal(await picture(iris.fid), null);
+    farcaster.pictures.set(iris.fid, "https://pictures.example/test/avatar.png");
+    for (let run = 0; run < 3; run++) await fixture.network.runHourly(now() + 25 * 60 * 60);
+    assert.equal((await load((await picture(iris.fid))!, "image/png")).status, 200);
+  });
+
   test("an app can upload its member's Farcaster picture itself", async () => {
     const picture = await as(carol).uploadImage(TEST_PNG, "image/png");
     const member = await as(carol).updateProfile({ farcasterPicture: picture.id });

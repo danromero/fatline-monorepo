@@ -257,9 +257,13 @@ private struct AppRoot: View {
             }
         }
         .publishesMenuFlags(state)
-        .feedTitleBar(showsPortal: !state.addingNetwork && !state.settingUp
+        .feedTitleBar(showsTitle: !state.addingNetwork && !state.settingUp
             && (state.networks.selected != nil || !state.networks.memberships.isEmpty || (state.model != nil && !state.needsConnection)))
         .sheet(isPresented: Bindable(state).showNetworkComposer) { NetworkComposerSheet() }
+        #if DEBUG
+        // `-FatlineJoin "CODE@host"` joins a demo network at launch, as on iPhone.
+        .task { await state.networks.joinFromLaunch() }
+        #endif
         .onChange(of: state.networks.selectedHost) { state.networkPath = [] }
         // News in the networks that aren't showing, for the dots on the title and in its menu.
         .task(id: state.networks.memberships.map(\.host)) {

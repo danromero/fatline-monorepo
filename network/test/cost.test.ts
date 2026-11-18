@@ -74,6 +74,7 @@ describe("what each route costs", () => {
   test("reads", async () => {
     within(await cost(await api(owner, "GET", "/feed")), { read: 180, written: 6 }, "the feed");
     within(await cost(await api(owner, "GET", "/feed")), { read: 10, written: 0 }, "the feed again, from the cache");
+    within(await cost(await api(owner, "GET", "/feed?replies=1")), { read: 220, written: 6 }, "the feed with replies");
     within(await cost(await api(owner, "GET", "/activity")), { read: 400, written: 4 }, "activity");
     within(await cost(await api(owner, "GET", `/posts/${root}`)), { read: 600, written: 4 }, "a thread's first page of 200");
     within(await cost(await api(owner, "GET", "/members")), { read: 60, written: 0 }, "the member list");
@@ -106,7 +107,9 @@ describe("what each route costs", () => {
 
   test("the hourly job", async () => {
     const now = Math.floor(Date.now() / 1000);
-    within(await cost(await network.fetch(`/__test/hourly?at=${now + 3600}`, { method: "POST" })), { read: 150, written: 20 }, "the hourly job");
+    // The first run also pulls the admin's follows, as one run a day does: a few settings rows, and a row a follow.
+    within(await cost(await network.fetch(`/__test/hourly?at=${now + 3600}`, { method: "POST" })), { read: 150, written: 30 }, "the hourly job with the daily pull");
+    within(await cost(await network.fetch(`/__test/hourly?at=${now + 7200}`, { method: "POST" })), { read: 150, written: 20 }, "the hourly job");
   });
 });
 
@@ -118,9 +121,11 @@ const ALLOWED_SCANS: { table: string; statement: RegExp; why: string }[] = [
   { table: "settings", statement: /^SELECT key, value FROM settings$/, why: "a handful of rows" },
   { table: "members", statement: /^SELECT \* FROM members ORDER BY joined, fid$/, why: "GET /members lists every member by design" },
   { table: "members", statement: /^SELECT fid, username FROM members$/, why: "every name, for mentions; one row a member" },
-  { table: "members", statement: /^SELECT fid FROM members WHERE checked < \?/, why: "the hourly check, one row a member" },
+  { table: "members", statement: /^SELECT fid, .* FROM members WHERE checked < \?/, why: "the hourly check, one row a member" },
   { table: "join_requests", statement: /^SELECT fid, username, requested, status FROM join_requests/, why: "the admin's list" },
   { table: "admin_log", statement: /^SELECT id, time, admin, action, detail FROM admin_log ORDER BY id DESC LIMIT/, why: "newest first, stopped by LIMIT" },
+  { table: "p", statement: /^SELECT p\.hash, .* FROM posts p WHERE \(p\.parent_fid IS NULL OR .* ORDER BY p\.time DESC, p\.hash DESC LIMIT 51$/,
+    why: "the feed with replies: posts_newest in order, stopped by LIMIT" },
   { table: "used_signatures", statement: /^DELETE FROM used_signatures WHERE expires/, why: "hourly; only five minutes of sign-ins" },
   { table: "sessions", statement: /^DELETE FROM sessions WHERE expires/, why: "hourly; at most 20 a member" },
   { table: "admin_links", statement: /^DELETE FROM admin_links WHERE expires/, why: "hourly; a few at most" },

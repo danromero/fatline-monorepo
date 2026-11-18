@@ -30,6 +30,9 @@ struct NetworkMembership: Codable, Hashable, Identifiable, Sendable {
     var isAdmin = false
     /// A link to the network's picture, or nil for its first letter.
     var icon: String?
+    /// A link to this account's Farcaster picture, which the app uploads once the network lets it in,
+    /// and then forgets.
+    var farcasterPicture: String?
 
     var id: String { host }
     var title: String { name ?? host }
@@ -108,6 +111,8 @@ struct NetworkPost: Codable, Hashable, Identifiable, Sendable {
     let text: String
     let mentions: [Mention]
     let parent: String?
+    /// Who wrote the post a reply answers. A network from before replies showed in the feed sends none.
+    var parentFid: UInt64?
     let embeds: [Embed]
     let replies: Int
     let likes: Int
@@ -131,7 +136,8 @@ struct NetworkMember: Codable, Hashable, Identifiable, Sendable {
     var ownAvatar: Bool?
 
     var id: UInt64 { fid }
-    var handle: String { username.hasPrefix("!") ? username : "@\(username)" }
+    /// How a member shows: their username, bare, as Farcaster names show. One without a username is "!" and their ID.
+    var handle: String { username }
 }
 
 struct NetworkInfo: Codable, Sendable {
@@ -292,13 +298,20 @@ struct NetworkInvite: Decodable, Hashable, Sendable {
 
 /// Talks to one network's server as this device.
 struct NetworkClient: Sendable {
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+
     let membership: NetworkMembership
+    /// How requests go out: the shared HTTP session, or a stand-in in tests.
+    var transport: Transport = { try await HTTP.loadResponse($0) }
 
     private var base: URL { NetworkMessages.origin(membership.host).appending(path: "api/v1") }
 
     // MARK: Joining and signing in
 
-    static func join(host: String, device: NetworkDevice, invite: String?, avatar: String? = nil) async throws -> NetworkMembership {
+    /// Asks to join. The Farcaster picture isn't sent: once signed in, the app uploads it itself
+    /// (`setFarcasterPicture`), so the network fetches nothing.
+    static func join(host: String, device: NetworkDevice, invite: String?,
+                     transport: @escaping Transport = { try await HTTP.loadResponse($0) }) async throws -> NetworkMembership {
         let key = Curve25519.Signing.PrivateKey()
         let issued = Int64(Date.now.timeIntervalSince1970)
         let text = NetworkMessages.networkKeyText(host: host, fid: device.fid, networkKey: key.publicKey.rawRepresentation, issued: issued)
@@ -313,9 +326,8 @@ struct NetworkClient: Sendable {
             "networkApproval": ["issued": issued, "signature": approval],
         ]
         if let invite { body["invite"] = invite }
-        if let avatar { body["avatar"] = avatar }
         struct Answer: Decodable { let status: NetworkMembership.Status }
-        let answer: Answer = try await NetworkClient(membership: membership).call("POST", "join", json: body, signedIn: false)
+        let answer: Answer = try await NetworkClient(membership: membership, transport: transport).call("POST", "join", json: body, signedIn: false)
         membership.status = answer.status
         return membership
     }
@@ -372,9 +384,11 @@ struct NetworkClient: Sendable {
         return info
     }
 
+    /// Posts and replies, newest first. A network from before replies showed in the feed ignores the
+    /// question and sends posts alone.
     func feed() async throws -> [NetworkPost] {
         struct Page: Decodable { let posts: [NetworkPost] }
-        let page: Page = try await call("GET", "feed")
+        let page: Page = try await call("GET", "feed", query: [URLQueryItem(name: "replies", value: "1")])
         return NetworkPost.kept(page.posts, limit: NetworkLimits.page)
     }
 
@@ -400,9 +414,37 @@ struct NetworkClient: Sendable {
 
     // MARK: Changing
 
-    func submit(_ message: SnapchainMessage) async throws {
+    /// With `readsLinks`, this app reads the post's links itself and sends what it found
+    /// (`sendPreviews`), so the network reads none of them.
+    func submit(_ message: SnapchainMessage, readsLinks: Bool = false) async throws {
         struct Answer: Decodable { let hash: String }
-        let _: Answer = try await call("POST", "messages", bytes: message.bytes)
+        let _: Answer = try await call("POST", "messages", bytes: message.bytes,
+                                       headers: readsLinks ? [Self.previewsHeader: "app"] : [:])
+    }
+
+    static let previewsHeader = "fatline-previews"
+
+    /// What this app read from one of a post's links, with the picture uploaded first.
+    struct LinkPreviewUpload: Equatable, Sendable {
+        let url: String
+        var title: String?
+        var description: String?
+        /// An uploaded picture's ID.
+        var image: String?
+
+        var isEmpty: Bool { title == nil && description == nil && image == nil }
+    }
+
+    /// The previews of a post's own links, which only its author can send.
+    func sendPreviews(_ hash: String, _ previews: [LinkPreviewUpload]) async throws {
+        let list: [[String: String]] = previews.map { preview in
+            var item = ["url": preview.url]
+            if let title = preview.title { item["title"] = title }
+            if let description = preview.description { item["description"] = description }
+            if let image = preview.image { item["image"] = image }
+            return item
+        }
+        try await expectNoContent("PUT", "posts/\(hash)/previews", json: ["previews": list])
     }
 
     func adminLink() async throws -> URL {
@@ -438,6 +480,12 @@ struct NetworkClient: Sendable {
     /// An uploaded picture's ID, or "farcaster" to go back to the Farcaster picture.
     func setAvatar(_ avatar: String) async throws -> NetworkMember {
         try Self.fitting(await call("PATCH", "me", json: ["avatar": avatar]))
+    }
+
+    /// The Farcaster picture, which this app downloaded and uploaded (`upload`), so the network
+    /// needn't fetch it.
+    func setFarcasterPicture(_ id: String) async throws -> NetworkMember {
+        try Self.fitting(await call("PATCH", "me", json: ["farcasterPicture": id]))
     }
 
     private static func fitting(_ member: NetworkMember) throws -> NetworkMember {
@@ -482,10 +530,12 @@ struct NetworkClient: Sendable {
         guard (200..<300).contains(status) else { throw Self.error(status: status, data: data) }
     }
 
-    private func call<Answer: Decodable>(_ method: String, _ path: String, json: [String: Any]? = nil,
-                                         bytes: Data? = nil, contentType: String? = nil, signedIn: Bool = true) async throws -> Answer {
+    private func call<Answer: Decodable>(_ method: String, _ path: String, query: [URLQueryItem] = [], json: [String: Any]? = nil,
+                                         bytes: Data? = nil, contentType: String? = nil, headers: [String: String] = [:],
+                                         signedIn: Bool = true) async throws -> Answer {
         if signedIn && membership.token == nil { throw NetworkError.notSignedIn }
-        let (data, status) = try await send(method, path, json: json, bytes: bytes, contentType: contentType, token: signedIn ? membership.token : nil)
+        let (data, status) = try await send(method, path, query: query, json: json, bytes: bytes, contentType: contentType,
+                                            headers: headers, token: signedIn ? membership.token : nil)
         guard (200..<300).contains(status) else { throw Self.error(status: status, data: data) }
         do {
             return try JSONDecoder().decode(Answer.self, from: data)
@@ -506,12 +556,14 @@ struct NetworkClient: Sendable {
         return "\(platform)/\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0")"
     }()
 
-    private func send(_ method: String, _ path: String, json: [String: Any]? = nil, bytes: Data? = nil,
-                      contentType: String? = nil, token: String?) async throws -> (Data, Int) {
-        var request = URLRequest(url: base.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData,
+    private func send(_ method: String, _ path: String, query: [URLQueryItem] = [], json: [String: Any]? = nil, bytes: Data? = nil,
+                      contentType: String? = nil, headers: [String: String] = [:], token: String?) async throws -> (Data, Int) {
+        let url = base.appending(path: path)
+        var request = URLRequest(url: query.isEmpty ? url : url.appending(queryItems: query), cachePolicy: .reloadIgnoringLocalCacheData,
                                  timeoutInterval: bytes.map { $0.count > 1_000_000 ? 120 : 30 } ?? 30)
         request.httpMethod = method
         request.setValue(Self.appHeader, forHTTPHeaderField: "fatline-app")
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization") }
         if let json {
             request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -521,7 +573,7 @@ struct NetworkClient: Sendable {
             request.httpBody = bytes
         }
         do {
-            let (data, response) = try await HTTP.loadResponse(request)
+            let (data, response) = try await transport(request)
             return (data, response.statusCode)
         } catch {
             throw NetworkError.unreachable

@@ -186,7 +186,7 @@ A join request:
 }
 ```
 
-`invite` and `avatar` are optional. `avatar` is a link to the member's Farcaster picture, which the server copies in; an app that uploads that picture itself leaves it out and sends `farcasterPicture` to `PATCH /me` once signed in, so the server fetches nothing. A valid invite approves the request at once and spends one of its uses. Without one, the request waits for the admin, unless the server has a Farcaster hub (`HUB_URL`) and the FID is on the admin's follow list. Then it's approved at once, which the admin can turn off in Settings (`admitFollows`). The list is pulled from the hub only when the admin asks (`POST /admin/follows/pull`, or Pull follows on Settings), and joins and sign-ins check that kept list, never the hub. A waiting request is checked again at each `POST /session`, so someone the admin follows later gets in once the admin pulls again. Asking again while a request waits changes nothing, and asking again after the admin refused stays refused. A member's new device is approved at once.
+`invite` and `avatar` are optional. `avatar` is a link to the member's Farcaster picture, which the server copies in; an app that uploads that picture itself leaves it out and sends `farcasterPicture` to `PATCH /me` once signed in. Without `avatar`, a server that has a Farcaster hub (`HUB_URL`) asks it for the member's picture once they're in, and copies that in. It asks again at the daily check for a member who still has no picture. A valid invite approves the request at once and spends one of its uses. Without one, the request waits for the admin, unless the server has a Farcaster hub (`HUB_URL`) and the FID is on the admin's follow list. Then it's approved at once, which the admin can turn off in Settings (`admitFollows`). The server pulls the list from the hub once a day while that's on, and when the admin asks (`POST /admin/follows/pull`, or Pull follows on Settings). Joins and sign-ins check that kept list, never the hub. A waiting request is checked again at each `POST /session`, so someone the admin follows later gets in after the next pull. Asking again while a request waits changes nothing, and asking again after the admin refused stays refused. A member's new device is approved at once.
 
 `avatar` is the Farcaster picture as the app knows it. A server that can read Farcaster profiles itself uses its own copy instead. Either way, the server copies the picture into its own storage.
 
@@ -203,7 +203,7 @@ A join request:
 | Route | Answer |
 | --- | --- |
 | `GET /network` | `{ "name", "icon", "retention": "30 days" or "forever", "you": Member }` |
-| `GET /feed?cursor=` | `{ "posts": [Post], "next" }`. Top-level posts, newest first, 50 to a page, without people you muted. Deleted posts stay out, even with replies. Supports `If-None-Match` |
+| `GET /feed?cursor=&replies=1` | `{ "posts": [Post], "next" }`. Top-level posts, newest first, 50 to a page, without people you muted. Deleted posts stay out, even with replies. With `replies=1`, replies are in it too, among the posts by time, except replies to someone you muted; each has the post it answers in `parent` and that post's author in `parentFid`. An app asks for them once it shows whom a reply answers. Supports `If-None-Match` |
 | `GET /posts/{hash}?cursor=` | `{ "post": Post, "replies": [Post], "next" }`, with the newest 200 replies first, oldest first within the page; `next` is the cursor for older ones, or null. Supports `If-None-Match` |
 | `POST /messages` | Body: the message bytes, as `application/octet-stream`. Answers `{ "hash" }`. An app that reads its links' pages itself sends `Fatline-Previews: app`, and the server then reads none of them |
 | `PUT /posts/{hash}/previews` | `{ "previews": [{ "url", "title", "description", "image" }] }`, one for each of the post's links at most, from its author only. `url` is one of the post's own links; `title` and `description` are up to 300 characters, on one line, and can't hide or reverse text; `image` is an uploaded image's ID. Each replaces that link's last. Answers `204` |
@@ -227,6 +227,7 @@ A Post:
   "text": "Dinner at 7? @alice",
   "mentions": [{ "fid": 12, "username": "alice" }],
   "parent": null,
+  "parentFid": null,
   "embeds": [
     { "type": "image", "url": "https://host/m/ab12…", "width": 2048, "height": 1536,
       "src": "https://host/media/ab12…/display?…", "full": "https://host/media/ab12…/original?…" },
@@ -242,7 +243,7 @@ A Post:
 }
 ```
 
-`text` shows each mention as `@username`. A deleted post with replies comes back with `deleted: true` and no text, embeds, or message. `message` lets an app check the signature itself.
+`text` shows each mention as `@username`. On a reply, `parent` is the post it answers and `parentFid` that post's author; both are null on a post. A deleted post with replies comes back with `deleted: true` and no text, embeds, or message. `message` lets an app check the signature itself.
 
 A Member:
 
@@ -315,7 +316,7 @@ Errors are JSON with a `message` the app may show, as on other Fatline servers, 
 | `429` | `daily-limit` | Past a daily limit below. Try again tomorrow |
 | `503` | `unavailable` | Optimism or Farcaster's name server didn't answer. Try again in a minute |
 
-Besides limits a minute, by address and by member, a member's changes through the API can write 5,000 database rows a day (UTC), as D1 counts them, index entries included, so a post costs what it writes (about 10 to 20 rows), upload 50 pictures, and file 20 reports, and gets `429` past them. An account can also sign in 100 times a day and send `POST /join` 50 times. Past its sign-ins, `POST /session` writes nothing, not even the signature. Signing out, leaving, and deleting your posts don't count, so they always work. A member can make 30 reads a minute, and a read that reads more than 100 database rows counts its rows against 200,000 a day; answers from the cache and `304`s are free. `GET /feed` and `GET /activity` answer with an `ETag`, and a request whose `If-None-Match` matches answers `304` without reading the feed, so apps should send it when they poll. An account keeps at most 10 devices on a network at once, counting those added or signed in within 30 days (the admin is never limited this way), the newest 10 network keys, and the newest 20 sessions; a device whose network key was dropped joins again with its own device key. IPv6 addresses count by their /64. A join from a new device asks Optimism who owns the FID, and the whole network asks at most 30 times a minute; past that, those joins answer `429`. Image links and the network's picture take 1,000 loads a minute per address.
+Besides limits a minute, by address and by member, a member's changes through the API can write 5,000 database rows a day (UTC), as D1 counts them, index entries included, so a post costs what it writes (about 10 to 20 rows), upload 50 pictures, and file 20 reports, and gets `429` past them. An account can also sign in 100 times a day and send `POST /join` 50 times. Past its sign-ins, `POST /session` writes nothing, not even the signature. Signing out, leaving, and deleting your posts don't count, so they always work. A member can make 120 reads a minute across all their devices, and a read that reads more than 100 database rows counts its rows against 200,000 a day; answers from the cache and `304`s are free. `GET /feed` and `GET /activity` answer with an `ETag`, and a request whose `If-None-Match` matches answers `304` without reading the feed, so apps should send it when they poll. An account keeps at most 10 devices on a network at once, counting those added or signed in within 30 days (the admin is never limited this way), the newest 10 network keys, and the newest 20 sessions; a device whose network key was dropped joins again with its own device key. IPv6 addresses count by their /64. A join from a new device asks Optimism who owns the FID, and the whole network asks at most 30 times a minute; past that, those joins answer `429`. Image links and the network's picture take 1,000 loads a minute per address.
 
 ## Usernames
 

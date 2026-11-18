@@ -196,13 +196,7 @@ struct ComposerPlus: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
-        Button(action: state.session.openComposer) {
-            Image(systemName: "plus")
-                .font(FatlineStyle.plusGlyph)
-                .foregroundStyle(FatlineStyle.actionInk)
-                .frame(width: 48, height: 48)
-                .background(FatlineStyle.action, in: .circle)
-        }
+        Button(action: state.session.openComposer) { PlusFace() }
         .buttonStyle(.plain)
         .accessibilityLabel("Compose")
         .accessibilityIdentifier("compose")

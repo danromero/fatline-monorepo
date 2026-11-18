@@ -37,12 +37,24 @@ export class FakeFarcaster {
   readonly custodyDown = new Set<number>();
   /** Set to make the stand-in hub answer 503, as if it were down. */
   hubDown = false;
-  /** How many times the network has asked the hub, so tests can check joins never do. */
+  /** How many times the network has asked the hub who someone follows, so tests can check joins never do. */
   hubCalls = 0;
+  /** Links to people's Farcaster pictures, as a hub would answer: FID → link. */
+  readonly pictures = new Map<number, string>();
+  /** The FIDs whose picture the network has asked the hub for, in order. */
+  readonly pictureAsked: number[] = [];
   /** How many times the network has read the test page, so tests can check it reads nothing for an app that does. */
   pageLoads = 0;
   /** The most the hub gives in one page, whatever the network asks for, so tests can make it page. */
   hubPageSize = 1000;
+  /** Set to make the stand-in hub answer every request with a redirect to `/elsewhere/`, as a hub that moved or was taken over might. */
+  hubRedirect = false;
+  /** The hub paths that answered with that redirect. */
+  readonly redirected: string[] = [];
+  /** Requests that reached `/elsewhere/`, with the `x-api-key` each carried. A network should send none. */
+  readonly elsewhere: { path: string; key: string | undefined }[] = [];
+  /** The `x-api-key` the hub last got, so tests can check HUB_API_KEY reaches it. */
+  lastHubKey: string | undefined;
   private server = createServer((request, response) => this.answer(request, response));
   port = 0;
 
@@ -98,6 +110,30 @@ export class FakeFarcaster {
         : ([...this.usernames].find(([, username]) => username === name) ?? [0, undefined]);
       if (!found[1]) return send(404, { error: "Could not resolve current name" });
       return send(200, { transfer: { id: 1, timestamp: 1, username: found[1], owner: "0x0", from: 0, to: found[0] } });
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/elsewhere/")) {
+      this.elsewhere.push({ path: url.pathname, key: request.headers["x-api-key"] as string | undefined });
+      return send(200, { messages: [], nextPageToken: "" });
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/hub/")) {
+      this.lastHubKey = request.headers["x-api-key"] as string | undefined;
+      if (this.hubRedirect) {
+        this.redirected.push(url.pathname);
+        response.writeHead(302, { location: `/elsewhere/${url.pathname.slice("/hub/".length)}${url.search}` });
+        response.end();
+        return;
+      }
+    }
+    // The Snapchain HTTP API call a network makes for a member's Farcaster picture.
+    if (request.method === "GET" && url.pathname === "/hub/userDataByFid") {
+      const fid = Number(url.searchParams.get("fid"));
+      this.pictureAsked.push(fid);
+      if (this.hubDown) return send(503, { error: "unavailable" });
+      const value = this.pictures.get(fid);
+      if (!value || url.searchParams.get("user_data_type") !== "USER_DATA_TYPE_PFP") return send(404, { errCode: "not_found" });
+      return send(200, {
+        data: { type: "MESSAGE_TYPE_USER_DATA_ADD", fid, timestamp: 1, network: "FARCASTER_NETWORK_MAINNET", userDataBody: { type: "USER_DATA_TYPE_PFP", value } },
+      });
     }
     // The Snapchain HTTP API call a network makes for whom the admin follows, a page at a time.
     if (request.method === "GET" && url.pathname.startsWith("/hub/")) {

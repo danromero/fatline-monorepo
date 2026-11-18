@@ -119,6 +119,20 @@ describe("a new owner", () => {
     assert.equal(await stale.signIn(), "refused");
   });
 
+  test("ends the old owner's waiting keys when the new owner joins with an invite code", async () => {
+    const pia = newPerson(2106, "pia");
+    assert.equal(await joined(pia), "pending");
+    const stale = as(pia);
+    const moved = movedTo(pia);
+    fixture.network.farcaster.add(moved);
+    const current = await fixture.network.device(moved);
+    // No admin step: the code lets the new owner in at once.
+    assert.equal(await current.join({ invite: (await admin.createInvite()).code }), "approved");
+    assert.equal(await current.signIn(), "approved");
+    assert.equal(await stale.signIn(), "refused");
+    await rejects(stale.join(), 401);
+  });
+
   test("keeps a refused or blocked FID out", async () => {
     const lu = newPerson(2103, "lu");
     assert.equal(await joined(lu), "pending");

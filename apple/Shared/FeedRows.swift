@@ -119,10 +119,11 @@ private struct CastLinkHotspots: ViewModifier {
 #endif
 
 /// The author's picture, or their initials until it loads or when there isn't one.
-private struct CastAvatar: View {
+struct CastAvatar: View {
     let url: URL?
     let handle: String
     var background = FatlineStyle.quiet
+    var size = FatlineStyle.avatarSize
     @State private var loaded: CGImage?
 
     private static let maxPixels = 128
@@ -141,7 +142,7 @@ private struct CastAvatar: View {
                     .foregroundStyle(FatlineStyle.secondary)
             }
         }
-        .frame(width: FatlineStyle.avatarSize, height: FatlineStyle.avatarSize)
+        .frame(width: size, height: size)
         .background(background)
         .clipShape(.circle)
         .task(id: url) {
@@ -211,6 +212,10 @@ struct CastRow: View {
     var bottomInset = FatlineStyle.rowPadding
     /// While the row's menu is open.
     var highlighted = false
+    /// A symbol on the avatar's corner that says what kind of row this is, as in Activity on iPhone.
+    var badge: String? = nil
+    /// Whose post a reply in the feed answers, for the line under the name.
+    var replyingTo: String? = nil
 
     /// On a Mac the links inside a cast's text are separate controls, which combining would hide.
     private var hasTextLinks: Bool {
@@ -226,6 +231,9 @@ struct CastRow: View {
         let images = cast.imageURLs
         HStack(alignment: .top, spacing: FatlineStyle.avatarGap) {
             CastAvatar(url: cast.avatarURL, handle: handle, background: highlighted ? FatlineStyle.paper : FatlineStyle.quiet)
+                .overlay(alignment: .bottomTrailing) {
+                    if let badge { CastBadge(symbol: badge) }
+                }
                 .padding(.top, FatlineStyle.avatarTopInset)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: FatlineStyle.castGap) {
@@ -234,12 +242,22 @@ struct CastRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     CastTime(cast: cast)
                 }
+                if let replyingTo {
+                    Text("Replying to \(Text(verbatim: replyingTo).font(FatlineStyle.metaStrong))")
+                        .font(FatlineStyle.meta)
+                        .foregroundStyle(FatlineStyle.secondary)
+                }
                 if !cast.text.isEmpty {
                     CastBodyText(text: cast.text)
                 }
                 ForEach(images, id: \.self) { url in
                     CastPicture(url: url)
+                        #if os(iOS)
+                        // 8 under the text, and the row's own padding under the picture.
+                        .padding(.top, FatlineStyle.castGap)
+                        #else
                         .padding(.vertical, 4)
+                        #endif
                 }
                 ForEach(links, id: \.self) { url in
                     Link(destination: url) {
@@ -266,12 +284,12 @@ struct CastRow: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .foregroundStyle(FatlineStyle.secondary)
-                    .padding(.leading, FatlineStyle.avatarGap)
+                    // A quiet card, as a link's card is.
+                    .padding(FatlineStyle.groupGap)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(alignment: .leading) {
-                        Rectangle().fill(FatlineStyle.line).frame(width: 2)
-                    }
-                    .padding(.top, 4)
+                    .background(highlighted ? FatlineStyle.paper : FatlineStyle.quiet,
+                                in: .rect(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
+                    .padding(.top, FatlineStyle.castGap)
                 }
             }
         }
@@ -290,6 +308,54 @@ struct CastRow: View {
         let name = Text(verbatim: handle).font(FatlineStyle.bodyStrong)
         guard let action else { return name }
         return Text("\(name) \(Text(action).font(FatlineStyle.body))")
+    }
+}
+
+/// What an Activity row is, on its avatar's corner: a filled circle with a paper ring, hanging just
+/// past the avatar.
+private struct CastBadge: View {
+    let symbol: String
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(FatlineStyle.badgeGlyph)
+            .foregroundStyle(FatlineStyle.actionInk)
+            .frame(width: FatlineStyle.badgeSize, height: FatlineStyle.badgeSize)
+            .background(FatlineStyle.action, in: .circle)
+            .padding(FatlineStyle.unreadRing)
+            .background(FatlineStyle.paper, in: .circle)
+            .offset(x: FatlineStyle.badgeOverhang + FatlineStyle.unreadRing, y: FatlineStyle.badgeOverhang + FatlineStyle.unreadRing)
+    }
+}
+
+/// A label over a group of rows, such as New in Activity.
+struct SectionLabel: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(FatlineStyle.metaStrong)
+            .foregroundStyle(FatlineStyle.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, FatlineStyle.gutter)
+            .padding(.top, FatlineStyle.gutter)
+            .padding(.bottom, FatlineStyle.castGap)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The round plus's face, on both apps: lit from above, with one soft shadow under it.
+struct PlusFace: View {
+    var body: some View {
+        Image(systemName: "plus")
+            .font(FatlineStyle.plusGlyph)
+            .foregroundStyle(FatlineStyle.actionInk)
+            .frame(width: FatlineStyle.plusSize, height: FatlineStyle.plusSize)
+            .background(LinearGradient(colors: [FatlineStyle.actionLit, FatlineStyle.action], startPoint: .top, endPoint: .bottom), in: .circle)
+            .overlay {
+                Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0)], startPoint: .top, endPoint: .center), lineWidth: 1)
+            }
+            .shadow(color: FatlineStyle.floatShadow, radius: 12, y: 8) // layout-ok: the plus's shadow, as on the canvas
     }
 }
 

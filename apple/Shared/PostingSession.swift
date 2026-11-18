@@ -15,6 +15,9 @@ final class PostingSession {
     var busy = false
     var notice: String?
     private(set) var postToast: PostToast?
+    #if os(iOS)
+    @ObservationIgnored private var toastTimer: Task<Void, Never>?
+    #endif
     private(set) var activePostTitle: String?
     var showComposer = false
     var recoveryError: String?
@@ -120,9 +123,22 @@ final class PostingSession {
         withAnimation(Platform.reduceMotion ? nil : .easeInOut(duration: 0.2)) {
             postToast = toast
         }
+        #if os(iOS)
+        toastTimer?.cancel()
+        toastTimer = nil
+        #endif
         if let toast {
             Platform.announce([toast.title, toast.detail].compactMap { $0 }.joined(separator: ". "))
             Platform.haptic(toast.detail == nil ? .done : .problem)
+            #if os(iOS)
+            // The toast clears itself, whichever screen is showing or not: a couple of seconds for Sent,
+            // six for a problem, which takes reading. A view's own timer stops when the view goes, which left the toast up.
+            toastTimer = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(toast.detail == nil ? FatlineStyle.toastSeconds : 6)) } catch { return }
+                guard let self, self.postToast?.id == toast.id else { return }
+                self.setPostToast(nil)
+            }
+            #endif
         }
     }
 

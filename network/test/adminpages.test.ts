@@ -129,7 +129,7 @@ describe("admin pages", () => {
     assert.equal((await submit("/admin/follows/pull", { csrf })).headers.get("location"), "/admin/settings?error=hub-failed");
     fixture.network.farcaster.hubDown = false;
     assert.equal((await submit("/admin/follows/pull", { csrf })).headers.get("location"), "/admin/settings?message=follows-pulled");
-    assert.match((await page("/admin/settings?message=follows-pulled")).html, /0 people, pulled just now\./);
+    assert.match((await page("/admin/settings?message=follows-pulled")).html, /0 people, pulled just now\. The network pulls again once a day\./);
 
     assert.equal((await submit("/admin/settings", { csrf, name: "The Cabin", retention: "forever", admitFollows: "off" })).status, 303);
     assert.equal((await as(alice).settings()).admitFollows, false);

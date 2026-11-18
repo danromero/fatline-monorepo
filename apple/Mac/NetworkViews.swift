@@ -90,13 +90,7 @@ struct NetworkWindow: View {
             }
         }
         .overlay(alignment: .bottom) {
-            Button { state.newPost() } label: {
-                Image(systemName: "plus")
-                    .font(FatlineStyle.plusGlyph)
-                    .foregroundStyle(FatlineStyle.actionInk)
-                    .frame(width: 48, height: 48) // layout-ok: the plus is the same 48 as the feed's
-                    .background(FatlineStyle.action, in: .circle)
-            }
+            Button { state.newPost() } label: { PlusFace() }
             .buttonStyle(.plain)
             .accessibilityLabel("Compose")
             .padding(.trailing, FatlineStyle.gutter)
@@ -140,13 +134,18 @@ struct NetworkPostRow: View {
     private var model: NetworkModel { state.networks }
     private var handle: String { model.handle(for: post.fid) }
     private var isOwn: Bool { post.fid == model.ownFID }
+    /// In the feed a reply says whose post it answers. Under that post it needn't.
+    private var replyingTo: String? {
+        guard place == .feed, post.parent != nil, let fid = post.parentFid else { return nil }
+        return model.handle(for: fid)
+    }
 
     var body: some View {
         if post.deleted {
             FeedMessage(text: "This post was deleted")
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                CastRow(cast: model.cast(for: post), handle: handle, bottomInset: 0, highlighted: menuOpen)
+                CastRow(cast: model.cast(for: post), handle: handle, bottomInset: 0, highlighted: menuOpen, replyingTo: replyingTo)
                 ForEach(model.linkCards(for: post)) { card in
                     NetworkLinkCard(card: card, highlighted: menuOpen)
                         .padding(.leading, FatlineStyle.textColumn)
@@ -275,7 +274,9 @@ struct NetworkThreadView: View {
     @State private var host: String?
     @FocusState private var replyFocused: Bool
 
-    private var shown: NetworkPost { root ?? post }
+    /// The post whose replies these are. Opened from a reply in the feed, it's the post that reply
+    /// answers, which shows once it's read.
+    private var shown: NetworkPost? { root ?? (post.parent == nil ? post : nil) }
     private var canSend: Bool {
         !sending && !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && NetworkMessages.characterCount(reply) <= NetworkMessages.maxCharacters
@@ -286,8 +287,10 @@ struct NetworkThreadView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        NetworkPostRow(post: shown, place: .root) { replyFocused = true }
-                        CastDivider()
+                        if let shown {
+                            NetworkPostRow(post: shown, place: .root) { replyFocused = true }
+                            CastDivider()
+                        }
                         if let failure {
                             FeedMessage(text: failure, color: FatlineStyle.danger)
                         } else if loaded && replies.isEmpty {
@@ -306,7 +309,7 @@ struct NetworkThreadView: View {
                     if let last { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
                 }
             }
-            if !shown.deleted { replyBar }
+            if let shown, !shown.deleted { replyBar }
         }
         .task {
             if host == nil { host = state.networks.selectedHost }
@@ -344,7 +347,7 @@ struct NetworkThreadView: View {
 
     private func load() async {
         do {
-            let thread = try await state.networks.thread(post.hash)
+            let thread = try await state.networks.thread(post.parent ?? post.hash)
             root = thread.post
             replies = thread.replies
             failure = nil
@@ -355,7 +358,7 @@ struct NetworkThreadView: View {
     }
 
     private func send() {
-        guard canSend, let host else { return }
+        guard canSend, let host, let shown else { return }
         sending = true
         failure = nil
         Task {
@@ -371,48 +374,30 @@ struct NetworkThreadView: View {
     }
 }
 
-/// Replies to your posts and mentions of you, pushed in the window. Each opens the replies it's part of.
+/// Replies to your posts and mentions of you, pushed in the window: New, then Earlier, with the same
+/// rows as iPhone. Each opens the replies it's part of.
 struct NetworkActivityView: View {
     @Environment(AppState.self) private var state
-    @State private var items: [NetworkActivity.Item] = []
-    @State private var loaded = false
-    @State private var failure: String?
+    @State private var activity = NetworkActivityState()
 
     private var model: NetworkModel { state.networks }
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                if let failure {
-                    FeedMessage(text: failure, color: FatlineStyle.danger)
-                } else if loaded && items.isEmpty {
-                    FeedMessage(text: "Replies to your posts and mentions of you show here.")
-                }
-                ForEach(items, id: \.post.hash) { item in
-                    Button { state.networkPath.append(.thread(item.threadRoot)) } label: {
-                        CastRow(cast: cast(for: item), handle: model.handle(for: item.post.fid),
-                                action: item.kind == "reply" ? "replied" : "mentioned you")
+                if let membership = model.selected {
+                    NetworkActivityList(activity: activity, model: model, membership: membership) {
+                        state.networkPath.append(.thread($0))
                     }
-                    .buttonStyle(.plain)
-                    if item.post.hash != items.last?.post.hash { CastDivider() }
                 }
             }
             .frame(maxWidth: FatlineStyle.columnMaxWidth)
             .frame(maxWidth: .infinity)
         }
         .task {
-            do { items = try await model.activity() } catch { failure = error.localizedDescription }
-            loaded = true
+            activity.begin(model)
+            await activity.load(model, admin: model.selected?.isAdmin ?? false)
         }
-    }
-
-    /// The post, quoting the one it answers.
-    private func cast(for item: NetworkActivity.Item) -> FeedCast {
-        var cast = model.cast(for: item.post)
-        if let parent = item.parent, !parent.deleted {
-            cast.quote = FeedCast.Quote(fid: parent.fid, handle: model.handle(for: parent.fid), text: parent.text)
-        }
-        return cast
     }
 }
 

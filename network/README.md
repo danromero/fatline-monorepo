@@ -37,6 +37,10 @@ Each phrase signs one approval on this Mac and is never saved. A phrase on the c
 
 `npm run real -- --keychain` uses the phrase of a throwaway account saved in your login Keychain: set `FATLINE_E2E_HANDLE` to its username, and save the phrase once with `security add-generic-password -s fatline-e2e -a <username> -w`. `FATLINE_PHRASE` and `FATLINE_SECOND_PHRASE` take phrases from the environment instead, and `--exit` stops at the end. Otherwise the network keeps running with key files in `.real`, which hold this Mac's keys but not the phrases, until Ctrl-C deletes them.
 
+## Deploy it
+
+[SETUP.md](SETUP.md) puts a network on your own Cloudflare account, step by step. It's written for a coding agent: give yours the link, or follow it yourself.
+
 ## Run it locally
 
 ```bash
@@ -53,7 +57,7 @@ It listens on `http://localhost:8787` with a local database. To reach it from a 
 | `INVITE_PATH` | A long random path for an invite page at `/<INVITE_PATH>/invite`. Set it as a secret. Its Download button serves `downloads/Fatline.dmg` from the media bucket. Without it, there's no invite page |
 | `OPTIMISM_RPC_URL` | One or more Optimism RPCs, separated by commas and tried in order. With two or more, an owner counts only when two agree. One is trusted alone. Defaults to five public ones |
 | `FNAME_URL` | Defaults to Farcaster's fname server |
-| `HUB_URL` | A Snapchain HTTP API, such as `https://hub.example/v1`. With it, people the admin follows on Farcaster get in without waiting, unless the admin turns that off in Settings. The admin pulls the follow list on Settings, and joins check that list, never the hub. Without it, everyone waits |
+| `HUB_URL` | A Snapchain HTTP API, such as `https://hub.example/v1`. With it, people the admin follows on Farcaster get in without waiting, unless the admin turns that off in Settings. The server pulls the follow list once a day, and when the admin asks on Settings, and joins check that list, never the hub. It also asks the hub for a new member's Farcaster picture when their app sent none. Without it, everyone waits |
 | `HUB_API_KEY` | Sent to `HUB_URL` as `x-api-key`, for hubs that need one. Set it as a secret |
 
 ## Run the tests

@@ -11,7 +11,7 @@ Fatline has no built-in server or API key. You choose how it connects.
 | [`apple`](apple) | The Mac and iPhone apps, in one Xcode project that shares most of its code | [Download for Mac](https://github.com/danromero/fatline-monorepo/releases/latest/download/Fatline.dmg) or [join the iPhone beta on TestFlight](https://testflight.apple.com/join/SnTSSbrE) |
 | [`chrome`](chrome) | A Chrome extension that puts Fatline in x.com's sidebar | [Build it and load it](chrome/README.md#run-it-locally) |
 | [`server`](server) | A Cloudflare Worker that forwards Fatline's reads and posts to your own Neynar account | [Deploy it](server/README.md) |
-| [`network`](network) | A private network's server, a Cloudflare Worker on D1 and R2 | [Try it locally](network/README.md#try-it) |
+| [`network`](network) | A private network's server, a Cloudflare Worker on D1 and R2 | [Try it locally](network/README.md#try-it), or [deploy it](network/SETUP.md) |
 | [`docs`](docs) | What a server has to answer to hand out codes ([SERVER.md](docs/SERVER.md)), and what a network server answers ([NETWORK.md](docs/NETWORK.md)) | |
 | [`recovery`](recovery) | The offline signing helper that turns a recovery phrase into a new posting key, shared by the apps and the extension | |
 
@@ -44,7 +44,7 @@ Anyone can run either kind of server. To set up a custom server, give a coding a
 
 A network is a small private social network on one server: everyone in it can read everyone else, and nobody outside can read anything. People join with their Farcaster account, and the admin decides who gets in, by invite code, by request, or because the admin follows them on Farcaster. Posts, replies, and likes stay on the network and never reach Farcaster. In the Mac and iPhone apps, Add Network takes a network's address or an invite code.
 
-Joining asks for your recovery phrase once per device, to approve a key for that device, and the network checks with Farcaster's ID registry that the phrase owns your FID. Whoever runs a network's server can read everything posted there. [docs/NETWORK.md](docs/NETWORK.md) is the spec, written so anyone can build a client or a server against it, and [`network`](network) is a server that follows it.
+Joining asks for your recovery phrase once per device, to approve a key for that device, and the network checks with Farcaster's ID registry that the phrase owns your FID. Whoever runs a network's server can read everything posted there. [docs/NETWORK.md](docs/NETWORK.md) is the spec, written so anyone can build a client or a server against it, and [`network`](network) is a server that follows it. To set up your own, give a coding agent [this guide](network/SETUP.md).
 
 ## Your keys
 

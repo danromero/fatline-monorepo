@@ -1,70 +1,5 @@
 import SwiftUI
 
-/// The title in a feed's bar, which opens the Networks sheet: the network's mark and name, or the
-/// portal for Farcaster, with a chevron, and a dot while another network has news.
-struct NetworkTitleButton: View {
-    /// Nil is Farcaster.
-    let membership: NetworkMembership?
-    let othersHaveNews: Bool
-    let action: () -> Void
-
-    /// The portal is the Farcaster feed's own 36-point title, and a network's mark sits in the same bar.
-    private static let portalSize: CGFloat = 36 // layout-ok: the Farcaster feed's title
-    private static let markSize: CGFloat = 26 // layout-ok: the title's mark, as on the canvas
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: FatlineStyle.itemGap) {
-                if let membership {
-                    if membership.status == .approved {
-                        NetworkMark(name: membership.title, icon: membership.icon, size: Self.markSize)
-                        Text(verbatim: membership.title)
-                            .font(FatlineStyle.bodyStrong)
-                            .lineLimit(1)
-                    } else {
-                        // Nothing a network says about itself shows before it lets you in.
-                        NetworkWaitingMark(size: Self.markSize)
-                        Text(verbatim: membership.host)
-                            .font(FatlineStyle.bodyStrong)
-                            .lineLimit(1)
-                    }
-                } else {
-                    Image("Portal")
-                        .resizable()
-                        .frame(width: Self.portalSize, height: Self.portalSize)
-                        .clipShape(.circle)
-                }
-                Image(systemName: "chevron.down")
-                    .font(FatlineStyle.metaStrong)
-                    .foregroundStyle(FatlineStyle.secondary)
-                if othersHaveNews {
-                    Circle()
-                        .fill(FatlineStyle.ink)
-                        .frame(width: FatlineStyle.unreadDot, height: FatlineStyle.unreadDot)
-                }
-            }
-            .foregroundStyle(FatlineStyle.ink)
-            .padding(.horizontal, FatlineStyle.itemGap)
-            .frame(minHeight: FatlineStyle.headerHeight)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        // Like a system bar's title: it stops growing at the largest regular size, and a long press
-        // shows it larger.
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .accessibilityShowsLargeContentViewer()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label)
-        .accessibilityHint("Shows your networks")
-        .accessibilityIdentifier("network-title")
-    }
-
-    private var label: String {
-        let name = membership.map { $0.status == .approved ? $0.label : $0.host } ?? "Farcaster"
-        return "\(name). Switch network" + (othersHaveNews ? ", news in another network" : "")
-    }
-}
-
 /// A network that hasn't let you in yet: an empty dashed tile where its mark would be.
 struct NetworkWaitingMark: View {
     var size = FatlineStyle.avatarSize
@@ -77,8 +12,9 @@ struct NetworkWaitingMark: View {
     }
 }
 
-/// Farcaster and each network, from the title. A check marks the one showing, a dot one with news, and
-/// a network that hasn't let you in yet shows only its address, dimmed. Add Network is last.
+/// Farcaster and each network, from the title: a mark, the name, and the address under a network's
+/// own name. The one showing sits in a capsule with a check, a dot marks one with news, and a
+/// network that hasn't let you in yet shows only its address, dimmed. Add Network is last, under a rule.
 struct NetworksSheet: View {
     /// Closes the sheet and starts joining another network.
     let addNetwork: () -> Void
@@ -87,11 +23,6 @@ struct NetworksSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var height: CGFloat = 0
 
-    /// The sheet's rows, as on the canvas: a 32-point mark and two lines.
-    private static let rowHeight: CGFloat = 60 // layout-ok: the Networks sheet's rows, as on the canvas
-    /// Add Network's row, shorter than a network's, as on the canvas.
-    private static let addRowHeight: CGFloat = 56 // layout-ok: the Add Network row, as on the canvas
-
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -99,22 +30,22 @@ struct NetworksSheet: View {
                 VStack(spacing: 0) {
                     farcaster
                     ForEach(model.memberships) { membership in
-                        divider
                         row(membership)
                     }
                     FatlineDivider(inset: FatlineStyle.gutter)
+                        .padding(.vertical, FatlineStyle.itemGap)
                     addRow
                 }
+                .padding(.horizontal, FatlineStyle.sheetRowInset)
+                .padding(.bottom, FatlineStyle.sheetRowInset)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
             }
             .scrollBounceBehavior(.basedOnSize)
         }
         .padding(.top, FatlineStyle.itemGap)
         .foregroundStyle(FatlineStyle.ink)
-        .background(FatlineStyle.paper.ignoresSafeArea())
-        .presentationDetents([.height(FatlineStyle.itemGap + FatlineStyle.headerHeight + max(height, Self.rowHeight))])
+        .presentationDetents([.height(FatlineStyle.itemGap + FatlineStyle.headerHeight + max(height, FatlineStyle.sheetRowHeight))])
         .presentationDragIndicator(.visible)
-        .presentationBackground(FatlineStyle.paper)
     }
 
     private var header: some View {
@@ -131,33 +62,24 @@ struct NetworksSheet: View {
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                // The label's 12-point inset puts Done's edge on the gutter.
-                .padding(.trailing, FatlineStyle.gutter - FatlineStyle.groupGap)
+                // The label's 12-point inset puts Done's edge where the rows' checks end.
+                .padding(.trailing, FatlineStyle.sheetRowInset + FatlineStyle.gutter - FatlineStyle.groupGap)
             }
             // Like a system bar, it stops growing before the title runs into Done.
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-    }
-
-    private var divider: some View {
-        FatlineDivider(inset: FatlineStyle.gutter)
-            .padding(.leading, FatlineStyle.textColumn - FatlineStyle.gutter)
     }
 
     private var farcaster: some View {
         let showing = model.selectedHost == nil
         return Button { choose(nil) } label: {
             HStack(spacing: FatlineStyle.groupGap) {
-                Image("Portal")
-                    .resizable()
-                    .frame(width: FatlineStyle.avatarSize, height: FatlineStyle.avatarSize)
-                    .clipShape(.circle)
-                    .accessibilityHidden(true)
+                FarcasterMark()
                 Text("Farcaster")
                     .font(FatlineStyle.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if showing { check }
             }
-            .rowFrame(height: Self.rowHeight)
+            .sheetRow(showing: showing)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
@@ -201,7 +123,7 @@ struct NetworksSheet: View {
                 }
             }
             .foregroundStyle(approved ? FatlineStyle.ink : FatlineStyle.secondary)
-            .rowFrame(height: Self.rowHeight)
+            .sheetRow(showing: showing)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
@@ -230,7 +152,7 @@ struct NetworksSheet: View {
                     .font(FatlineStyle.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .rowFrame(height: Self.addRowHeight)
+            .sheetRow(showing: false)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("add-network")
@@ -251,9 +173,11 @@ struct NetworksSheet: View {
 }
 
 private extension View {
-    func rowFrame(height: CGFloat) -> some View {
+    /// A row in the sheet, with a capsule behind the network that's showing.
+    func sheetRow(showing: Bool) -> some View {
         padding(.horizontal, FatlineStyle.gutter)
-            .frame(maxWidth: .infinity, minHeight: height)
-            .contentShape(.rect)
+            .frame(maxWidth: .infinity, minHeight: FatlineStyle.sheetRowHeight)
+            .background(showing ? FatlineStyle.selection : .clear, in: .capsule)
+            .contentShape(.capsule)
     }
 }

@@ -7,7 +7,10 @@ export interface Env {
   /** Optimism RPCs to ask who owns an FID, separated by commas and tried in order. Without it, three public ones. */
   OPTIMISM_RPC_URL?: string;
   FNAME_URL?: string;
-  /** A Snapchain HTTP API, such as `https://hub.example/v1`, for whom the admin follows. Without it, everyone waits for approval. */
+  /**
+   * A Snapchain HTTP API, such as `https://hub.example/v1`, for whom the admin follows and for members'
+   * Farcaster pictures. Without it, everyone waits for approval, and a member has the picture their app sent.
+   */
   HUB_URL?: string;
   /** Sent to HUB_URL as `x-api-key`. Set it as a secret. */
   HUB_API_KEY?: string;

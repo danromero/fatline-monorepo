@@ -217,4 +217,9 @@ export const MIGRATIONS: string[][] = [
     // failing don't hold up everyone else.
     `ALTER TABLE members ADD COLUMN check_after INTEGER NOT NULL DEFAULT 0`,
   ],
+  [
+    // Posts and replies together, newest first, for a feed that shows replies: read in order and stopped
+    // at a page, where the feed's own index only reaches posts.
+    `CREATE INDEX posts_newest ON posts (time DESC, hash DESC) WHERE deleted IS NULL`,
+  ],
 ];

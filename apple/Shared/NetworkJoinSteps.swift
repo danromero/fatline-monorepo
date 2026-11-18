@@ -4,8 +4,9 @@ import SwiftUI
 // started's choice between Farcaster and a private network. `NetworkJoiner` holds their logic, and each
 // app adds its own recovery phrase step.
 
-/// Getting started's choice.
-enum SetupChoice { case farcaster, network }
+/// Getting started's choice: Farcaster or a private network to add, or a network already on this
+/// device, by its host.
+enum SetupChoice: Hashable { case farcaster, network, existing(String) }
 
 /// The network's address or invite code. As the first step of Add Network, its Back leaves the flow.
 struct NetworkAddressStep: View {
@@ -238,9 +239,13 @@ struct NetworkJoinResultStep: View {
     }
 }
 
-/// Farcaster or a private network, as two cards with radio marks, then Continue.
+/// Farcaster or a private network, as two cards with radio marks, then Continue. With networks
+/// already on this device, each is a card too, under Your networks, so setup is also the way back
+/// to one.
 struct NetworkSetupChoiceStep: View {
     @Binding var choice: SetupChoice
+    /// The networks already on this device. With none, the screen is the two cards alone.
+    var networks: [NetworkMembership] = []
     let next: () -> Void
 
     private static let iconSize = FatlineStyle.avatarSize
@@ -258,20 +263,26 @@ struct NetworkSetupChoiceStep: View {
                 FatlineStepHeader(title: "Get started", instruction: "You can add the other one later.")
                 VStack(spacing: FatlineStyle.itemGap) {
                     card(.farcaster, title: "Farcaster", detail: "The people you follow") {
-                        Image("Portal")
-                            .resizable()
-                            .frame(width: Self.iconSize, height: Self.iconSize)
-                            .clipShape(.circle)
-                            .accessibilityHidden(true)
+                        FarcasterMark(size: Self.iconSize)
                     }
-                    card(.network, title: "Private network", detail: "One you were invited to") {
-                        RoundedRectangle(cornerRadius: Self.iconSize * FatlineStyle.markRadiusRatio, style: .continuous)
-                            .strokeBorder(FatlineStyle.outline, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                            .frame(width: Self.iconSize, height: Self.iconSize)
-                    }
+                    card(.network, title: "Private network", detail: "One you were invited to") { emptyMark }
                 }
                 .padding(.top, 20) // layout-ok: the setup steps' title-to-field gap
+                if !networks.isEmpty {
+                    Text("Your networks")
+                        .font(FatlineStyle.metaStrong)
+                        .foregroundStyle(FatlineStyle.secondary)
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.top, FatlineStyle.sectionGap)
+                    VStack(spacing: FatlineStyle.itemGap) {
+                        ForEach(networks) { membership in
+                            existing(membership)
+                        }
+                    }
+                    .padding(.top, FatlineStyle.itemGap)
+                }
             }
+            .padding(.bottom, FatlineStyle.gutter)
             .padding(.horizontal, FatlineStyle.screenGutter)
             .padding(.top, FatlineStyle.screenTop)
             .frame(maxWidth: FatlineStyle.columnMaxWidth, alignment: .leading)
@@ -290,17 +301,47 @@ struct NetworkSetupChoiceStep: View {
         .fatlineStepBar()
     }
 
-    private func card<Icon: View>(_ option: SetupChoice, title: String, detail: String, @ViewBuilder icon: () -> Icon) -> some View {
+    /// A dashed tile where a mark would be: a network not added yet, or one that hasn't let you in.
+    private var emptyMark: some View {
+        RoundedRectangle(cornerRadius: Self.iconSize * FatlineStyle.markRadiusRatio, style: .continuous)
+            .strokeBorder(FatlineStyle.outline, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+            .frame(width: Self.iconSize, height: Self.iconSize)
+            .accessibilityHidden(true)
+    }
+
+    /// A network already on this device: its mark, its name, and its address under a name of its own,
+    /// so a network can't pass for another. Nothing a network says about itself shows before it lets
+    /// you in, so one that hasn't is its address, dimmed, and where the request stands.
+    @ViewBuilder private func existing(_ membership: NetworkMembership) -> some View {
+        if membership.status == .approved {
+            card(.existing(membership.host), title: membership.title, detail: membership.name == nil ? nil : membership.host) {
+                NetworkMark(name: membership.title, icon: membership.icon, size: Self.iconSize)
+            }
+        } else {
+            card(.existing(membership.host), title: membership.host,
+                 detail: membership.status == .pending ? "Waiting" : "Not approved", dimmed: true) { emptyMark }
+        }
+    }
+
+    private func card<Icon: View>(
+        _ option: SetupChoice, title: String, detail: String?, dimmed: Bool = false, @ViewBuilder icon: () -> Icon
+    ) -> some View {
         let on = choice == option
         return Button { choice = option } label: {
             HStack(spacing: FatlineStyle.groupGap) {
                 icon()
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(title).font(FatlineStyle.bodyStrong)
-                    Text(detail)
-                        .font(FatlineStyle.meta)
-                        .foregroundStyle(FatlineStyle.secondary)
+                    Text(verbatim: title)
+                        .font(FatlineStyle.bodyStrong)
+                        .foregroundStyle(dimmed ? FatlineStyle.secondary : FatlineStyle.ink)
+                    if let detail {
+                        Text(verbatim: detail)
+                            .font(FatlineStyle.meta)
+                            .foregroundStyle(FatlineStyle.secondary)
+                    }
                 }
+                // A name or an address wraps at the largest text sizes, so it's whole at any size.
+                .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Circle()
                     .strokeBorder(on ? .clear : FatlineStyle.outline, lineWidth: 1.5)

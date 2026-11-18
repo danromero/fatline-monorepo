@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 
+/// Where the Farcaster feed's Settings has gone.
+enum FarcasterSettingsRoute: Hashable {
+    case people, connection
+}
+
+/// The Farcaster feed and its Settings, under the floating bar.
 struct FeedHome: View {
     let username: String?
     /// True right after signing in, which is when the follow list is read from the network.
@@ -17,26 +23,34 @@ struct FeedHome: View {
     let compose: () -> Void
     let signOut: () throws -> Void
     let deleteCast: (FeedCast) async throws -> Void
-    /// Opens the Networks sheet from the title, once this iPhone has a network.
-    let switchNetwork: (() -> Void)?
+    /// Opens the Networks sheet from the title. With no network yet, the sheet is the way to add one.
+    let switchNetwork: () -> Void
     let othersHaveNews: Bool
+    /// The Sent toast, which sits just above the bar.
+    let toast: AnyView
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @State private var model: FeedModel
-    @State private var showSettings = false
+    @State private var tab = FatlineTab.home
+    /// Settings is made the first time it shows, and then kept.
+    @State private var openedSettings = false
+    @State private var settingsPath: [FarcasterSettingsRoute] = []
+    @State private var stage = ScrollStage.top
     @State private var confirmingDelete: FeedCast?
     @State private var deleting: Set<String> = []
     @State private var deleteError: String?
     @State private var showDeleteHelp = false
 
     private static let feedTop = "feed-top"
+    /// Where a cast the feed scrolls to comes to rest: under the title's capsule, not behind it.
+    private static let restAnchor = UnitPoint(x: 0.5, y: 0.08)
 
     init(directory: URL, fid: UInt64, username: String?, signedIn: Bool, signOutBlock: String?, notice: String?, latestPost: FeedCast?,
          canDelete: Bool, connectionName: String, savedConnection: ConnectionChoice?,
          changeConnection: @escaping (ConnectionChoice) throws -> Void, compose: @escaping () -> Void,
          signOut: @escaping () throws -> Void, deleteCast: @escaping (FeedCast) async throws -> Void,
-         switchNetwork: (() -> Void)? = nil, othersHaveNews: Bool = false) {
+         switchNetwork: @escaping () -> Void, othersHaveNews: Bool = false, toast: AnyView = AnyView(EmptyView())) {
         _model = State(initialValue: FeedModel(directory: directory, ownFID: fid, ownHandle: username))
         self.username = username
         self.signedIn = signedIn
@@ -52,14 +66,81 @@ struct FeedHome: View {
         self.deleteCast = deleteCast
         self.switchNetwork = switchNetwork
         self.othersHaveNews = othersHaveNews
+        self.toast = toast
     }
 
+    private var picture: URL? { model.ownAvatarLink.flatMap(FeedCast.imageURL) }
+
     var body: some View {
+        FatlineTabShell(
+            tab: $tab, tabs: [.home, .settings], showsBar: tab == .home || settingsPath.isEmpty,
+            picture: picture, handle: username ?? "", compose: compose
+        ) {
+            ZStack {
+                feed.tabPage(.home, showing: tab)
+                if openedSettings || tab == .settings {
+                    settings.tabPage(.settings, showing: tab)
+                }
+            }
+        }
+        .onChange(of: tab) { _, tab in
+            if tab == .settings { openedSettings = true }
+        }
+        .background(FatlineStyle.paper.ignoresSafeArea())
+        .foregroundStyle(FatlineStyle.ink)
+        .tint(FatlineStyle.action)
+        .task { await model.start(signedIn: signedIn) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshIfStale() } } else { model.savePlace() }
+        }
+        .confirmationDialog(
+            "Delete this cast?",
+            isPresented: Binding(get: { confirmingDelete != nil }, set: { if !$0 { confirmingDelete = nil } }),
+            titleVisibility: .visible,
+            presenting: confirmingDelete
+        ) { cast in
+            Button("Delete", role: .destructive) { Task { await delete(cast) } }
+        } message: { _ in
+            Text("Farcaster apps will stop showing it. This can’t be undone.")
+        }
+        .alert("Couldn’t delete the cast", isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteError ?? "")
+        }
+        .alert("Sign in again to delete", isPresented: $showDeleteHelp) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(PostingError.postOnlyKey.errorDescription ?? "")
+        }
+    }
+
+    private var settings: some View {
+        NavigationStack(path: $settingsPath) {
+            FarcasterSettings(
+                model: model, username: username, picture: picture, connectionName: connectionName,
+                signOutBlock: signOutBlock, signOut: signOut
+            ) { settingsPath.append($0) }
+                .underBar()
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: FarcasterSettingsRoute.self) { route in
+                    switch route {
+                    case .people:
+                        PeopleList(model: model)
+                    case .connection:
+                        ConnectionForm(settings: savedConnection) { choice in
+                            try changeConnection(choice)
+                            settingsPath = []
+                        }
+                    }
+                }
+        }
+    }
+
+    private var feed: some View {
         let casts = model.casts
         let marker = model.marker(in: casts)
-        VStack(spacing: 0) {
-            header
-            FatlineDivider()
+        return VStack(spacing: 0) {
             if let problem = model.problem, !casts.isEmpty {
                 FeedProblemBanner(problem: problem, lastChecked: model.lastChecked, checking: model.loading) {
                     Platform.haptic(.tap)
@@ -70,6 +151,8 @@ struct FeedHome: View {
             ScrollViewReader { scroller in
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        header
+                        CastDivider()
                         if let notice {
                             FeedMessage(text: notice)
                             CastDivider()
@@ -92,9 +175,9 @@ struct FeedHome: View {
                         }
                     }
                     .scrollTargetLayout()
-                    .padding(.bottom, FatlineStyle.plusClearance)
                     .id(Self.feedTop)
                 }
+                .scrollStage($stage)
                 .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.2) { visible in
                     let visible = Set(visible)
                     if let top = casts.first(where: { visible.contains($0.id) }) { model.sawTop(top) }
@@ -104,14 +187,14 @@ struct FeedHome: View {
                     // After this pass, so the saved casts are laid out before the scroll.
                     Task {
                         // The marker is part of the cast's own view, so it shows at the top when it's there.
-                        scroller.scrollTo(cast, anchor: .top)
+                        scroller.scrollTo(cast, anchor: Self.restAnchor)
                         model.opened()
                     }
                 }
                 .onChange(of: casts.first?.id) { old, _ in
                     // New casts go in above. Unless the reader was at the top, keep what they were reading in place.
                     guard let reading = model.reading, reading != old else { return }
-                    scroller.scrollTo(reading, anchor: .top)
+                    scroller.scrollTo(reading, anchor: Self.restAnchor)
                 }
                 .onChange(of: latestPost) { _, post in
                     guard let post else { return }
@@ -132,41 +215,13 @@ struct FeedHome: View {
                 }
             }
             .refreshable { await model.refresh(reason: "pull") }
-            .overlay(alignment: .bottomTrailing) { ComposeButton(action: compose) }
+            .overlay(alignment: .bottom) { toast }
+            .scrollFade(stage)
+            .titleCapsule("Farcaster", news: othersHaveNews, label: switchLabel, shown: stage == .past, action: switchNetwork) {
+                FarcasterMark(size: FatlineStyle.titleCapsuleMark)
+            }
         }
-        .background(FatlineStyle.paper.ignoresSafeArea())
-        .foregroundStyle(FatlineStyle.ink)
-        .task { await model.start(signedIn: signedIn) }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await model.refreshIfStale() } } else { model.savePlace() }
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsSheet(
-                model: model, username: username, connectionName: connectionName, savedConnection: savedConnection,
-                changeConnection: changeConnection, signOutBlock: signOutBlock, signOut: signOut
-            )
-            .tint(FatlineStyle.action)
-        }
-        .confirmationDialog(
-            "Delete this cast?",
-            isPresented: Binding(get: { confirmingDelete != nil }, set: { if !$0 { confirmingDelete = nil } }),
-            titleVisibility: .visible,
-            presenting: confirmingDelete
-        ) { cast in
-            Button("Delete", role: .destructive) { Task { await delete(cast) } }
-        } message: { _ in
-            Text("Farcaster apps will stop showing it. This can’t be undone.")
-        }
-        .alert("Couldn’t delete the cast", isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(deleteError ?? "")
-        }
-        .alert("Sign in again to delete", isPresented: $showDeleteHelp) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(PostingError.postOnlyKey.errorDescription ?? "")
-        }
+        .underBar()
     }
 
     /// The long-press menu on a cast.
@@ -218,92 +273,61 @@ struct FeedHome: View {
         return "No recent casts."
     }
 
+    /// Farcaster where a network's name goes, with your name under it. It opens the Networks sheet,
+    /// which is also the way to add a first network.
     private var header: some View {
-        Group {
-            if let switchNetwork {
-                NetworkTitleButton(membership: nil, othersHaveNews: othersHaveNews, action: switchNetwork)
-            } else {
-                Image("Portal")
-                    .resizable()
-                    .frame(width: 36, height: 36)
-                    .clipShape(.circle)
-                    .accessibilityLabel("Fatline feed")
-            }
+        ScreenHeader(title: "Farcaster", meta: username, news: othersHaveNews, actionLabel: switchLabel, action: switchNetwork) {
+            FarcasterMark()
         }
-        .frame(maxWidth: .infinity, minHeight: FatlineStyle.headerHeight)
-        .overlay(alignment: .trailing) {
-            Button { showSettings = true } label: {
-                Image(systemName: "ellipsis")
-                    .font(FatlineStyle.markGlyph)
-                    .foregroundStyle(FatlineStyle.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Settings")
-            .accessibilityIdentifier("settings")
-            // The 15-point glyph is centered in its 44-point target, which puts its edge on the gutter.
-            .padding(.trailing, 1.5)
-        }
-        .padding(.bottom, FatlineStyle.headerGap)
+    }
+
+    private var switchLabel: String {
+        "Farcaster. Switch network" + (othersHaveNews ? ", news in another network" : "")
     }
 }
 
-/// Everything behind the three dots. Sign Out sits apart at the bottom and asks first, so it's hard to
-/// reach by accident.
-private struct SettingsSheet: View {
+/// Settings for Farcaster, in the bar's last tab: you, People, Connection, and diagnostics. Sign Out
+/// sits apart at the bottom and asks first, so it's hard to reach by accident.
+private struct FarcasterSettings: View {
     let model: FeedModel
     let username: String?
+    let picture: URL?
     let connectionName: String
-    let savedConnection: ConnectionChoice?
-    let changeConnection: (ConnectionChoice) throws -> Void
     let signOutBlock: String?
     let signOut: () throws -> Void
+    let open: (FarcasterSettingsRoute) -> Void
 
-    @Environment(\.dismiss) private var dismiss
     @State private var confirmingSignOut = false
     @State private var signOutError: String?
     @State private var copied = false
+    @State private var stage = ScrollStage.top
 
     var body: some View {
-        NavigationStack {
+        ScrollView {
             VStack(spacing: 0) {
-                FatlineDivider()
-                ScrollView {
-                    VStack(spacing: 0) {
-                        if let username {
-                            account(username)
-                            CastDivider()
-                        }
-                        NavigationLink { PeopleList(model: model) } label: { row("People") }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("settings-people")
-                        CastDivider()
-                        NavigationLink {
-                            ConnectionForm(settings: savedConnection) { choice in
-                                try changeConnection(choice)
-                                dismiss()
-                            }
-                        } label: { row("Connection", value: connectionName) }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("settings-connection")
-                        CastDivider()
-                        diagnostics
-                    }
+                ScreenHeader(title: username ?? "Settings", meta: "Farcaster") {
+                    CastAvatar(url: picture, handle: username ?? "")
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) { signOutSection }
-            }
-            .foregroundStyle(FatlineStyle.ink)
-            .background(FatlineStyle.paper.ignoresSafeArea())
-            .fatlineTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { dismiss() } label: {
-                        Text("Done").font(FatlineStyle.body)
-                    }
+                CastDivider()
+                Button { open(.people) } label: { SettingsRow(symbol: "person.2", title: "People") }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("settings-people")
+                TextColumnDivider()
+                Button { open(.connection) } label: {
+                    SettingsRow(symbol: "antenna.radiowaves.left.and.right", title: "Connection", value: connectionName)
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settings-connection")
+                TextColumnDivider()
+                diagnostics
             }
         }
+        .scrollStage($stage)
+        .scrollBounceBehavior(.basedOnSize)
+        .safeAreaInset(edge: .bottom, spacing: 0) { signOutSection }
+        .scrollFade(stage)
+        .foregroundStyle(FatlineStyle.ink)
+        .background(FatlineStyle.paper.ignoresSafeArea())
         .alert("Couldn’t sign out", isPresented: Binding(get: { signOutError != nil }, set: { if !$0 { signOutError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -311,54 +335,15 @@ private struct SettingsSheet: View {
         }
     }
 
-    private func account(_ username: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(verbatim: username)
-                .font(FatlineStyle.bodyStrong)
-            Spacer(minLength: 8)
-            Text("Signed in")
-                .font(FatlineStyle.meta)
-                .foregroundStyle(FatlineStyle.secondary)
-        }
-        .frame(minHeight: 44)
-        .padding(.horizontal, FatlineStyle.gutter)
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .combine)
-    }
-
-    private func row(_ title: String, value: String? = nil) -> some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(FatlineStyle.body)
-            Spacer(minLength: 8)
-            if let value {
-                Text(value)
-                    .font(FatlineStyle.meta)
-                    .foregroundStyle(FatlineStyle.secondary)
-            }
-            Image(systemName: "chevron.right")
-                .font(FatlineStyle.metaStrong)
-                .foregroundStyle(FatlineStyle.secondary)
-                .accessibilityHidden(true)
-        }
-        .frame(minHeight: 44)
-        .padding(.horizontal, FatlineStyle.gutter)
-        .padding(.vertical, 6)
-        .contentShape(.rect)
-    }
-
     private var diagnostics: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 UIPasteboard.general.string = model.diagnostics
                 Platform.haptic(.tap)
                 copied = true
                 UIAccessibility.post(notification: .announcement, argument: "Diagnostics copied")
             } label: {
-                Text(copied ? "Copied" : "Copy Diagnostics")
-                    .font(FatlineStyle.body)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(.rect)
+                SettingsRow(symbol: "doc.on.doc", title: copied ? "Copied" : "Copy Diagnostics", trailing: nil)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("copy-diagnostics")
@@ -367,29 +352,25 @@ private struct SettingsSheet: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 copied = false
             }
-            Text("Paste into a message or TestFlight feedback. Includes your Farcaster ID and feed loading results, but no keys, drafts, or cast text.")
-                .font(FatlineStyle.meta)
-                .foregroundStyle(FatlineStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(verbatim: FeedModel.versionLine)
-                .font(FatlineStyle.meta)
-                .foregroundStyle(FatlineStyle.secondary)
+            VStack(alignment: .leading, spacing: FatlineStyle.castGap) {
+                Text("Paste into a message or TestFlight feedback. Includes your Farcaster ID and feed loading results, but no keys, drafts, or cast text.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(verbatim: FeedModel.versionLine)
+            }
+            .font(FatlineStyle.meta)
+            .foregroundStyle(FatlineStyle.secondary)
+            .padding(.leading, FatlineStyle.textColumn)
+            .padding(.trailing, FatlineStyle.gutter)
+            .padding(.bottom, FatlineStyle.rowPadding)
         }
-        .padding(.horizontal, FatlineStyle.gutter)
-        .padding(.top, 24)
-        .padding(.bottom, FatlineStyle.rowPadding)
     }
 
     private var signOutSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             CastDivider()
             Button { confirmingSignOut = true } label: {
-                Text("Sign Out")
-                    .font(FatlineStyle.body)
-                    .foregroundStyle(signOutBlock == nil ? Color(uiColor: .systemRed) : FatlineStyle.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .padding(.horizontal, FatlineStyle.gutter)
-                    .contentShape(.rect)
+                SettingsRow(symbol: "rectangle.portrait.and.arrow.right", title: "Sign Out", trailing: nil,
+                            color: signOutBlock == nil ? FatlineStyle.danger : FatlineStyle.secondary)
             }
             .buttonStyle(.plain)
             .disabled(signOutBlock != nil)
@@ -406,10 +387,11 @@ private struct SettingsSheet: View {
                     .font(FatlineStyle.meta)
                     .foregroundStyle(FatlineStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, FatlineStyle.gutter)
+                    .padding(.leading, FatlineStyle.textColumn)
+                    .padding(.trailing, FatlineStyle.gutter)
+                    .padding(.bottom, FatlineStyle.itemGap)
             }
         }
-        .padding(.bottom, 8)
         .background(FatlineStyle.paper)
     }
 }
@@ -474,7 +456,7 @@ private struct PeopleList: View {
     private func row(_ person: FeedModel.Person) -> some View {
         let hidden = model.isHidden(person)
         let action = hidden ? "Unhide" : "Hide"
-        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+        return HStack(alignment: .firstTextBaseline, spacing: FatlineStyle.groupGap) {
             Text(person.handle)
                 .font(FatlineStyle.bodyStrong)
                 .foregroundStyle(hidden ? FatlineStyle.secondary : FatlineStyle.ink)
@@ -489,13 +471,13 @@ private struct PeopleList: View {
                 Text(action)
                     .font(FatlineStyle.body)
                     .foregroundStyle(hidden ? FatlineStyle.ink : FatlineStyle.secondary)
-                    .frame(minWidth: 72, minHeight: 44, alignment: .trailing)
+                    .frame(minWidth: FatlineStyle.postPillWidth, minHeight: FatlineStyle.buttonHitHeight, alignment: .trailing)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(action) \(person.handle)")
         }
         .padding(.horizontal, FatlineStyle.gutter)
-        .padding(.vertical, 6)
+        .frame(minHeight: FatlineStyle.listRowHeight)
     }
 }

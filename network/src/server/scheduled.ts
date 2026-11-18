@@ -1,6 +1,7 @@
 import { deletionStatements } from "./deletion.ts";
-import { collect } from "./media.ts";
+import { collect, copyAvatar } from "./media.ts";
 import type { Context } from "./env.ts";
+import { hubURL, refreshFollows } from "./follows.ts";
 import { custody, revokeOtherCustody, username } from "./identity.ts";
 import { settings } from "./store.ts";
 import { oldCounts } from "./daily.ts";
@@ -8,16 +9,22 @@ import { oldCounts } from "./daily.ts";
 const DAY = 24 * 60 * 60;
 const RETENTION = 30 * DAY;
 /**
- * Each member costs four requests to check: two to Optimism RPCs that must agree, and two to the fname
- * server. Workers on the free plan get 50 per run, so each hourly run checks the 12 members checked
- * longest ago. That covers 288 a day, more than a network of 100 needs.
+ * Requests to other servers a run may make. Workers on the free plan get 50. The daily pull of the
+ * admin's follows comes out of it first, a request a page, and members are checked with the rest.
  */
-const CHECKS_PER_RUN = 12;
+const FETCHES_PER_RUN = 48;
+/** Checking a member: two requests to Optimism RPCs that must agree, and two to the fname server. */
+const MEMBER_FETCHES = 4;
+/** A member with no picture: one request to the hub for its link, and one for the picture. */
+const PICTURE_FETCHES = 2;
+/** So each hourly run checks the 12 members checked longest ago. That covers 288 a day, more than a network of 100 needs. */
+const CHECKS_PER_RUN = FETCHES_PER_RUN / MEMBER_FETCHES;
 
 /** Runs every hour. */
 export async function hourly(context: Context) {
   await expire(context);
-  await checkMembers(context);
+  const pulling = await refreshFollows(context);
+  await checkMembers(context, FETCHES_PER_RUN - pulling);
   await context.db.batch([
     context.db.prepare("DELETE FROM used_signatures WHERE expires < ?").bind(context.now),
     context.db.prepare("DELETE FROM sessions WHERE expires < ?").bind(context.now),
@@ -48,13 +55,24 @@ const RETRY = 3 * 60 * 60;
  * and the last username stays until it answers. A member counts as checked only once Optimism said
  * who owns the FID. One it didn't answer for stays due, and waits RETRY to be tried again, so a few
  * that keep failing don't hold up everyone else.
+ *
+ * A member with no picture also gets their Farcaster one, when there's a hub to ask: one whose app
+ * sent none, or whose picture couldn't be read when they joined.
+ *
+ * `fetches` is what the run has left for requests to other servers. Members it can't cover stay due.
  */
-export async function checkMembers(context: Context) {
+export async function checkMembers(context: Context, fetches = FETCHES_PER_RUN) {
   const due = await context.db
-    .prepare("SELECT fid FROM members WHERE checked < ? AND check_after <= ? ORDER BY checked LIMIT ?")
+    .prepare("SELECT fid, avatar_media IS NULL AND farcaster_media IS NULL AS bare FROM members WHERE checked < ? AND check_after <= ? ORDER BY checked LIMIT ?")
     .bind(context.now - DAY, context.now, CHECKS_PER_RUN)
-    .all<{ fid: number }>();
+    .all<{ fid: number; bare: number }>();
+  const hub = hubURL(context.env) !== null;
   for (const member of due.results) {
+    const pictured = hub && member.bare === 1;
+    fetches -= MEMBER_FETCHES + (pictured ? PICTURE_FETCHES : 0);
+    if (fetches < 0) break;
+    // Before the ownership check, which leaves the loop early when Optimism doesn't answer.
+    if (pictured) await copyAvatar(context, member.fid).catch((error) => console.error("avatar copy failed", member.fid, String(error)));
     const [owner, name] = await Promise.allSettled([custody(context.env, member.fid), username(context.env, member.fid)]);
     try {
       if (owner.status === "rejected") {

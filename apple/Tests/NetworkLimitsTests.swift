@@ -1,3 +1,5 @@
+import CryptoKit
+import os
 import XCTest
 @testable import Fatline
 
@@ -30,6 +32,23 @@ final class NetworkLimitsTests: XCTestCase {
         let mentioned = (0..<mentions).map { #"{"fid":\#($0),"username":"u\#($0)"}"# }.joined(separator: ",")
         let json = #"{"hash":"0xab","fid":3,"time":1,"text":\#(String(data: try JSONEncoder().encode(text), encoding: .utf8)!),"mentions":[\#(mentioned)],"parent":null,"embeds":[\#(embeds.joined(separator: ","))],"replies":0,"likes":0,"liked":false,"deleted":false}"#
         return try JSONDecoder().decode(NetworkPost.self, from: Data(json.utf8))
+    }
+
+    func testTheFeedAsksForRepliesAndReadsWhomEachAnswers() async throws {
+        let asked = OSAllocatedUnfairLock<URL?>(initialState: nil)
+        let reply = #"{"hash":"0xcd","fid":4,"time":2,"text":"In!","mentions":[],"parent":"0xab","parentFid":3,"embeds":[],"replies":0,"likes":0,"liked":false,"deleted":false}"#
+        let answered = #"{"hash":"0xab","fid":3,"time":1,"text":"Dinner?","mentions":[],"parent":null,"parentFid":null,"embeds":[],"replies":1,"likes":0,"liked":false,"deleted":false}"#
+        let membership = NetworkMembership(host: "pine.example", fid: 3, key: Curve25519.Signing.PrivateKey().rawRepresentation, issued: 0,
+                                           approval: "", status: .approved, token: "token-1", expires: .max)
+        let client = NetworkClient(membership: membership, transport: { request in
+            asked.withLock { $0 = request.url }
+            return (Data(#"{"posts":[\#(reply),\#(answered)],"next":null}"#.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        let feed = try await client.feed()
+        XCTAssertEqual(asked.withLock { $0 }?.absoluteString, "https://pine.example/api/v1/feed?replies=1")
+        XCTAssertEqual(feed.map(\.parentFid), [3, nil])
+        XCTAssertNil(try post().parentFid, "a network from before replies showed in the feed sends none")
     }
 
     func testPostsPastWhatANetworkCanSendAreDropped() throws {

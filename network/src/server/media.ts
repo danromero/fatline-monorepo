@@ -9,6 +9,7 @@ import { isPublicHost } from "./hosts.ts";
 import { concat, sizeProblem, sniff, stripMetadata } from "./imagebytes.ts";
 import type { ImageType } from "./imagebytes.ts";
 import { checkDaily, countDaily, DAILY, hasDaily } from "./daily.ts";
+import { farcasterPicture } from "./follows.ts";
 import { meter } from "./meter.ts";
 import { parsePreview } from "./preview.ts";
 
@@ -279,11 +280,17 @@ async function copyImage(context: Context, link: string, fid: number | null, kin
   }
 }
 
-/** Copies a member's Farcaster picture, so other members' devices never load it from outside. */
-export async function copyAvatar(context: Context, fid: number, link: string) {
-  const id = await copyImage(context, link, fid, "avatar");
+/**
+ * Copies a member's Farcaster picture, so other members' devices never load it from outside. From
+ * `link` when their app sent one with the join, or else from the link the hub has for them, so a
+ * member whose app sent none still has a picture.
+ */
+export async function copyAvatar(context: Context, fid: number, link?: string | null) {
+  const from = link || (await farcasterPicture(context, fid));
+  if (!from) return;
+  const id = await copyImage(context, from, fid, "avatar");
   if (!id) return;
-  await context.db.prepare("UPDATE members SET farcaster_media = ? WHERE fid = ?").bind(id, fid).run();
+  await context.db.prepare("UPDATE members SET farcaster_media = ?, farcaster_avatar = ? WHERE fid = ?").bind(id, from, fid).run();
   // The copy it replaced. One for a member who left meanwhile goes in a day.
   await collect(context);
 }

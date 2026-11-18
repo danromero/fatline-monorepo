@@ -14,6 +14,7 @@ interface PostRow {
   fid: number;
   time: number;
   parent: string | null;
+  parent_fid: number | null;
   text: string;
   mentions: string;
   embeds: string;
@@ -27,12 +28,14 @@ interface PostRow {
 type StoredEmbed = { kind: "link"; url: string } | { kind: "image"; id: string; url: string } | { kind: "post"; fid: number; hash: string };
 
 // Counts are kept on each post (see schema.ts), so reading one doesn't read its replies and likes.
-const SELECT_POSTS = `SELECT p.hash, p.fid, p.time, p.parent, p.text, p.mentions, p.embeds, p.message, p.deleted,
+const SELECT_POSTS = `SELECT p.hash, p.fid, p.time, p.parent, p.parent_fid, p.text, p.mentions, p.embeds, p.message, p.deleted,
   p.reply_count AS replies, p.like_count AS likes,
   EXISTS (SELECT 1 FROM likes l WHERE l.post = p.hash AND l.fid = ?1) AS liked
   FROM posts p`;
 
 const NOT_MUTED = "p.fid NOT IN (SELECT muted FROM mutes WHERE fid = ?1)";
+/** A post, or a reply to someone the viewer hasn't muted. */
+const TO_NOBODY_MUTED = "(p.parent_fid IS NULL OR p.parent_fid NOT IN (SELECT muted FROM mutes WHERE fid = ?1))";
 
 /**
  * Posts whose hash is in `?2`, a JSON array. D1 takes at most 100 values in a statement, so a list
@@ -68,7 +71,7 @@ async function postsJSON(context: Context, viewer: Viewer, rows: PostRow[], opti
   const links = await mediaLinks(context);
 
   return rows.map((row) => {
-    const base = { hash: row.hash, fid: row.fid, time: row.time, parent: row.parent, replies: row.replies };
+    const base = { hash: row.hash, fid: row.fid, time: row.time, parent: row.parent, parentFid: row.parent_fid, replies: row.replies };
     if (row.deleted !== null) return { ...base, text: "", mentions: [], embeds: [], likes: 0, liked: false, deleted: true };
     const mentions = JSON.parse(row.mentions) as { fid: number; position: number }[];
     const embeds = options.nested ? [] : (JSON.parse(row.embeds) as StoredEmbed[]).flatMap((embed): Record<string, unknown>[] => {
@@ -115,18 +118,24 @@ function readCursor(text: string | null): { time: number; hash: string } | null 
   return { time: Number(match[1]), hash: match[2]! };
 }
 
-/** GET /feed. Deleted posts stay out of the feed, even with replies. */
+/**
+ * GET /feed. Deleted posts stay out of the feed, even with replies. With `replies=1` replies are in it
+ * too, each naming whom it answers in `parentFid`, except replies to someone the viewer muted. An app
+ * asks for them once it can show whom a reply answers; one that doesn't ask gets posts alone, as before.
+ */
 export async function feed(context: Context, viewer: Viewer, request: Request) {
-  const cursorText = new URL(request.url).searchParams.get("cursor");
+  const parameters = new URL(request.url).searchParams;
+  const cursorText = parameters.get("cursor");
   const cursor = readCursor(cursorText);
+  const replies = parameters.get("replies") === "1";
   // Nothing changed since the device last read this page: one row read, not the whole feed.
-  const tag = await versionTag(context, viewer.fid, `feed/${cursorText ?? ""}`);
+  const tag = await versionTag(context, viewer.fid, `feed${replies ? "+replies" : ""}/${cursorText ?? ""}`);
   if (request.headers.get("if-none-match") === tag) return notModified(tag);
   return cachedRead(context, tag, async () => {
     const rows = await selectPosts(
       context,
       viewer,
-      `WHERE p.parent IS NULL AND p.deleted IS NULL AND ${NOT_MUTED}
+      `WHERE ${replies ? TO_NOBODY_MUTED : "p.parent IS NULL"} AND p.deleted IS NULL AND ${NOT_MUTED}
         ${cursor ? "AND (p.time < ?2 OR (p.time = ?2 AND p.hash < ?3))" : ""}
         ORDER BY p.time DESC, p.hash DESC LIMIT ${PAGE + 1}`,
       cursor ? [cursor.time, cursor.hash] : [],

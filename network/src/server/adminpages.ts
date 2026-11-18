@@ -337,8 +337,8 @@ async function settingsPage(context: Context, csrf: string): Promise<Page> {
   const follows = hub ? await followList(context) : null;
   const followsSection = follows === null ? "" : `<h2>Who you follow</h2>
     <p class="meta">${follows.pulled === null
-      ? "Not pulled yet. Until you pull them, everyone waits for you."
-      : `${follows.count.toLocaleString("en-US")} ${follows.count === 1 ? "person" : "people"}, pulled ${ago(context.now, follows.pulled)}. People you follow after that wait until you pull again.${follows.complete ? "" : " Farcaster had more than one pull takes, so some of them wait too."}`}</p>
+      ? (current.admitFollows ? "Not pulled yet. The network pulls them within the hour, then once a day. Until then, everyone waits for you." : "Not pulled yet.")
+      : `${follows.count.toLocaleString("en-US")} ${follows.count === 1 ? "person" : "people"}, pulled ${ago(context.now, follows.pulled)}. ${current.admitFollows ? "The network pulls again once a day. People you follow after a pull wait until the next one." : "People you follow after that wait until you pull again."}${follows.complete ? "" : " Farcaster had more than one pull takes, so some of them wait too."}`}</p>
     ${button("/admin/follows/pull", follows.pulled === null ? "Pull follows" : "Pull again", csrf)}`;
   const body = `<form method="post" action="/admin/settings">${csrfField(csrf)}
       <label for="name">Name</label><input type="text" id="name" name="name" maxlength="64" value="${escape(current.name === context.host ? "" : current.name)}" placeholder="${escape(context.host)}">

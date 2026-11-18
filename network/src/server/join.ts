@@ -185,7 +185,8 @@ async function joinWithCode(
     context.db.prepare("DELETE FROM join_requests WHERE fid = ?").bind(fid),
     logStatement(context, null, "joined with code", { fid, code }),
   ]);
-  if (avatar) context.waitUntil(copyAvatar(context, fid, avatar).catch((error) => console.error("avatar copy failed", String(error))));
+  // Behind the answer. Without a link from the app, the hub is asked for one.
+  context.waitUntil(copyAvatar(context, fid, avatar).catch((error) => console.error("avatar copy failed", String(error))));
   return "approved";
 }
 
@@ -206,7 +207,8 @@ export async function addMember(
     context.db.prepare("DELETE FROM join_requests WHERE fid = ?").bind(fid),
     ...extra,
   ]);
-  if (avatar) context.waitUntil(copyAvatar(context, fid, avatar).catch((error) => console.error("avatar copy failed", String(error))));
+  // Behind the answer. Without a link from the app, the hub is asked for one.
+  context.waitUntil(copyAvatar(context, fid, avatar).catch((error) => console.error("avatar copy failed", String(error))));
 }
 
 /** POST /session. */

@@ -74,6 +74,29 @@ private struct CastEditor: View {
     }
 }
 
+/// Sent, or why a post wasn't confirmed. The session clears it after a few seconds. The toast fades
+/// out in place rather than being taken away, so a screen that changes while it goes can't leave it behind.
+private struct PostToastHost: View {
+    let toast: PostToast?
+    /// The last toast, which stays to fade out.
+    @State private var last: PostToast?
+
+    var body: some View {
+        ZStack {
+            if let shown = toast ?? last {
+                FeedToastView(toast: shown)
+                    .toastPresence(toast != nil)
+                    .transition(Platform.reduceMotion ? .opacity : .toast)
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.snappy(duration: 0.28), value: (toast ?? last)?.id)
+        .onChange(of: toast?.id, initial: true) { _, _ in
+            if let toast { last = toast }
+        }
+    }
+}
+
 private struct Composer: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
@@ -128,16 +151,14 @@ private struct Composer: View {
                     compose: session.openComposer,
                     signOut: session.signOut,
                     deleteCast: session.deleteCast,
-                    switchNetwork: networks.memberships.isEmpty ? nil : { showNetworks = true },
-                    othersHaveNews: networks.othersHaveNews
+                    switchNetwork: { showNetworks = true },
+                    othersHaveNews: networks.othersHaveNews,
+                    // Sits above the floating bar.
+                    toast: AnyView(Group { if !session.showComposer { postToastHost } })
                 )
                 .id(FeedIdentity(fid: fid, connection: session.connection))
-                .overlay(alignment: .bottom) {
-                    // Sits above the floating compose button.
-                    if !session.showComposer { postToastHost.padding(.bottom, FatlineStyle.plusClearance) }
-                }
             } else {
-                GettingStarted(session: session, switchNetwork: networks.memberships.isEmpty ? nil : { showNetworks = true }) {
+                GettingStarted(session: session) {
                     recoveryForm
                 }
             }
@@ -238,19 +259,9 @@ private struct Composer: View {
     }
 
     /// The feed and the composer each host this, because a full-screen cover hides whatever is behind it.
-    @ViewBuilder private var postToastHost: some View {
-        if let toast = session.postToast {
-            FeedToastView(toast: toast)
-                .padding(.horizontal, Self.composerInset)
-                .allowsHitTesting(false)
-                .transition(.opacity)
-                .task(id: toast.id) {
-                    do {
-                        try await Task.sleep(for: .seconds(toast.detail == nil ? 4 : 6))
-                        if session.postToast?.id == toast.id { session.setPostToast(nil) }
-                    } catch { }
-                }
-        }
+    private var postToastHost: some View {
+        PostToastHost(toast: session.postToast)
+            .padding(.horizontal, Self.composerInset)
     }
 
     private var recoveryForm: some View {

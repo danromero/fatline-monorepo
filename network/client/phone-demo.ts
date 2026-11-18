@@ -11,6 +11,9 @@
 // Control, with curl, while it runs:
 //   http://127.0.0.1:8799/post?net=pine&text=Hello   a new post, for the dot on the network not showing
 //   http://127.0.0.1:8799/reply?text=Hello           a reply under Cabin's dinner post
+//   http://127.0.0.1:8799/mention?text=Hello         a post that mentions frank, for Activity
+//   http://127.0.0.1:8799/answer?text=Hello          a reply to frank's newest post, for Activity
+//   Add &who=gina to either for gina, once she has joined from the Mac.
 //   http://127.0.0.1:8799/delete                     deletes Cabin's dinner post, for the placeholder
 //   http://127.0.0.1:8799/approve                    lets frank into Orchard
 //   http://127.0.0.1:8799/refuse                     refuses frank's request to Orchard
@@ -108,10 +111,20 @@ createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const net = url.searchParams.get("net") === "pine" ? "pine" : "cabin";
   const text = url.searchParams.get("text") ?? "Hello";
+  const who = url.searchParams.get("who") === "gina" ? { name: "gina", fid: gina.fid } : { name: "frank", fid: frank.fid };
   try {
     switch (url.pathname) {
       case "/post": response.end(`posted ${await posters[net].post({ text })}\n`); break;
       case "/reply": response.end(`replied ${await c.reply({ fid: bob.fid, hash: dinner }, { text })}\n`); break;
+      case "/mention":
+        response.end(`posted ${await posters[net].post({ text: `@${who.name} ${text}`, handles: new Map([[who.name, who.fid]]) })}\n`);
+        break;
+      case "/answer": {
+        const own = (await readers[net].feed()).posts.find((post) => post.fid === who.fid);
+        if (!own) { response.statusCode = 404; response.end(`${who.name} hasn't posted there\n`); break; }
+        response.end(`replied ${await readers[net].reply({ fid: own.fid, hash: own.hash }, { text })}\n`);
+        break;
+      }
       case "/delete": await b.remove(dinner); response.end("deleted the dinner post\n"); break;
       case "/approve": await r.approve(frank.fid); response.end("frank is in Orchard\n"); break;
       case "/refuse": await r.refuse(frank.fid); response.end("refused frank\n"); break;

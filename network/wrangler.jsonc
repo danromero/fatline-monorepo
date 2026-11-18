@@ -19,8 +19,10 @@
     { "name": "CUSTODY", "namespace_id": "2004", "simple": { "limit": 30, "period": 60 } },
     // Image links and the network's picture, by address. A feed full of pictures stays well under it.
     { "name": "PICTURES", "namespace_id": "2005", "simple": { "limit": 1000, "period": 60 } },
-    // A member's reads, by FID. The apps make about 4 a minute; each feed read is the heaviest query there is.
-    { "name": "READS", "namespace_id": "2006", "simple": { "limit": 30, "period": 60 } }
+    // A member's reads, by FID, so all their devices share it. Each device polls 4 a minute, and a like,
+    // post or opened thread is 1 more (4 in older builds). 30 ran out in normal use.
+    // Each feed read is the heaviest query there is, which the day's row budget also holds down.
+    { "name": "READS", "namespace_id": "2006", "simple": { "limit": 120, "period": 60 } }
   ],
   "vars": {
     // The FID of the person who runs this network. They're let in at once, as its admin.
