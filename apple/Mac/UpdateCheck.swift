@@ -34,7 +34,46 @@ enum UpdateCheck {
         let required: Bool
     }
 
-    private struct UpdateFailed: Error {}
+    /// Why an update stopped. Only a copy whose folder can't be written falls back to installing by
+    /// hand. A download that fails a check is deleted, and nothing suggests installing it anyway.
+    enum UpdateFailure: Error, Equatable {
+        /// The download, or the disk image in it, didn't work.
+        case download
+        /// The downloaded app isn't signed by the same developer as this copy.
+        case untrusted
+        /// The downloaded app isn't newer than this copy.
+        case notNewer
+        /// This copy's folder can't be written, as when it runs from the disk image.
+        case readOnly
+    }
+
+    /// What the app says when an update stops, and whether it opens the download to install by hand.
+    struct FailureNotice: Equatable {
+        let title: String
+        let detail: String
+        let opensDownload: Bool
+    }
+
+    nonisolated static func notice(for failure: UpdateFailure) -> FailureNotice {
+        switch failure {
+        case .untrusted:
+            FailureNotice(title: "Fatline didn’t install this update",
+                          detail: "The download isn’t signed by Fatline’s developer, so it was deleted. Your copy of Fatline is unchanged.",
+                          opensDownload: false)
+        case .notNewer:
+            FailureNotice(title: "Fatline didn’t install this update",
+                          detail: "The download isn’t newer than the Fatline you have, so it was deleted. Your copy of Fatline is unchanged.",
+                          opensDownload: false)
+        case .download:
+            FailureNotice(title: "Fatline couldn’t download the update",
+                          detail: "Check your connection. Fatline will offer it again next time it checks.",
+                          opensDownload: false)
+        case .readOnly:
+            FailureNotice(title: "Fatline couldn’t update itself",
+                          detail: "Open the Fatline.dmg that’s downloading, and drag Fatline to Applications.",
+                          opensDownload: true)
+        }
+    }
 
     /// Called whenever the app comes forward as well as at launch, because people leave it open for days.
     static func runIfDue() {
@@ -95,21 +134,28 @@ enum UpdateCheck {
         }
 
         let source = offer.fromPilot ? pilotFeed!.deletingLastPathComponent().appending(path: "Fatline.dmg") : publicDownload
+        let app = Bundle.main.bundleURL
         do {
-            let app = Bundle.main.bundleURL
             try await install(from: source, over: app, current: current)
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.createsNewApplicationInstance = true
-            _ = try await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
-            NSApp.terminate(nil)
         } catch {
-            // A copy that can't be replaced, like one running from the disk image, can still be updated by hand.
-            NSWorkspace.shared.open(source)
+            let failure = error as? UpdateFailure ?? .download
+            let notice = notice(for: failure)
+            // A copy that can't be replaced, like one running from the disk image, can still be updated by
+            // hand, with Gatekeeper checking the download as it opens. Nothing else falls back to that.
+            if notice.opensDownload { NSWorkspace.shared.open(source) }
+            // A download that didn't arrive is offered again. One that failed a check isn't.
+            if failure == .download, pilotFeed == nil { defaults.removeObject(forKey: announcedKey) }
             let failed = NSAlert()
-            failed.messageText = "Fatline couldn’t update itself"
-            failed.informativeText = "Open the Fatline.dmg that’s downloading, and drag Fatline to Applications."
+            failed.alertStyle = notice.opensDownload || failure == .download ? .informational : .warning
+            failed.messageText = notice.title
+            failed.informativeText = notice.detail
             failed.runModal()
+            return
         }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        _ = try? await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
+        NSApp.terminate(nil)
     }
 
     private static func version(at url: URL) async -> String? {
@@ -125,27 +171,54 @@ enum UpdateCheck {
         latest.compare(current, options: .numeric) == .orderedDescending
     }
 
+    /// Throws an `UpdateFailure` for each way it can stop. Nothing is replaced unless the download passes
+    /// both checks.
     @concurrent
     nonisolated private static func install(from source: URL, over app: URL, current: String) async throws {
-        let (dmg, _) = try await URLSession.shared.download(from: source)
-        let files = FileManager.default
-        // On the app's own volume, so the final swap is a rename.
-        let work = try files.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true)
-        defer {
-            try? files.removeItem(at: work)
-            try? files.removeItem(at: dmg)
+        // Known before downloading, so a copy on the disk image goes straight to installing by hand.
+        guard canReplace(app) else { throw UpdateFailure.readOnly }
+        let dmg: URL
+        do {
+            (dmg, _) = try await URLSession.shared.download(from: source)
+        } catch {
+            throw UpdateFailure.download
         }
+        let files = FileManager.default
+        defer { try? files.removeItem(at: dmg) }
+        // On the app's own volume, so the final swap is a rename.
+        guard let work = try? files.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true)
+        else { throw UpdateFailure.readOnly }
+        defer { try? files.removeItem(at: work) }
 
         let staged = work.appending(path: "Fatline.app")
-        try copyApp(fromDiskImage: dmg, mountingAt: work.appending(path: "mount"), to: staged)
+        do {
+            try copyApp(fromDiskImage: dmg, mountingAt: work.appending(path: "mount"), to: staged)
+        } catch {
+            throw UpdateFailure.download
+        }
+        try check(staged, current: current)
+        do {
+            _ = try files.replaceItemAt(app, withItemAt: staged)
+        } catch {
+            throw UpdateFailure.readOnly
+        }
+    }
 
+    /// Whether this copy can be swapped for a new one: its folder can be written. Not on the disk image,
+    /// a copy macOS moved to a read-only place to run, or a folder only an admin can change.
+    nonisolated static func canReplace(_ app: URL) -> Bool {
+        FileManager.default.isWritableFile(atPath: app.deletingLastPathComponent().path)
+    }
+
+    /// A downloaded copy has to be signed by the same developer as this one, then be newer.
+    nonisolated static func check(_ staged: URL, current: String) throws {
         try requireSameSigner(staged)
         guard let version = Bundle(url: staged)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
               isNewer(version, than: current)
-        else { throw UpdateFailed() }
-
-        _ = try files.replaceItemAt(app, withItemAt: staged)
+        else { throw UpdateFailure.notNewer }
     }
+
+    private struct ToolFailed: Error {}
 
     /// Uses diskutil, because hdiutil's attach and detach print deprecation warnings on macOS 27.
     nonisolated static func copyApp(fromDiskImage image: URL, mountingAt mount: URL, to destination: URL) throws {
@@ -155,7 +228,7 @@ enum UpdateCheck {
     }
 
     /// The real check on what was downloaded: it has to satisfy the signing requirement of the running app.
-    nonisolated private static func requireSameSigner(_ candidate: URL) throws {
+    nonisolated static func requireSameSigner(_ candidate: URL) throws {
         var running: SecCode?
         var mine: SecStaticCode?
         var requirement: SecRequirement?
@@ -166,7 +239,7 @@ enum UpdateCheck {
               SecCodeCopyDesignatedRequirement(mine, [], &requirement) == errSecSuccess,
               SecStaticCodeCreateWithPath(candidate as CFURL, [], &code) == errSecSuccess, let code,
               SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess
-        else { throw UpdateFailed() }
+        else { throw UpdateFailure.untrusted }
     }
 
     nonisolated private static func runTool(_ path: String, _ arguments: String...) throws {
@@ -177,6 +250,6 @@ enum UpdateCheck {
         process.standardError = FileHandle.nullDevice
         try process.run()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw UpdateFailed() }
+        guard process.terminationStatus == 0 else { throw ToolFailed() }
     }
 }

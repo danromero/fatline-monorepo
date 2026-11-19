@@ -39,7 +39,9 @@ struct NetworkMark: View {
     var body: some View {
         Group {
             if let picture {
+                // In full color in a toolbar button too, where the system would draw it as a template.
                 Image(decorative: picture, scale: 1)
+                    .renderingMode(.original)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFill()
@@ -71,7 +73,9 @@ struct FarcasterMark: View {
     var size = FatlineStyle.avatarSize
 
     var body: some View {
+        // In full color in a toolbar button too, where the system would draw it as a template.
         Image("Farcaster")
+            .renderingMode(.original)
             .resizable()
             .interpolation(.high)
             .frame(width: size, height: size)

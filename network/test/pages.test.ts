@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { describe, test } from "node:test";
+import { OPEN_SCRIPT } from "../src/server/links.ts";
 import { INVITE_PATH, useCabin } from "./fixtures.ts";
 
 /** Pages outside the API, and old Mac builds. Against the real Worker on a local D1, with a network of this file's own. */
@@ -66,7 +68,28 @@ describe("links to posts", () => {
     assert.equal(response.status, 200);
     const html = await response.text();
     assert.match(html, /Open in Fatline/);
-    assert.ok(html.includes(`href="fatline://open?network=${encodeURIComponent(fixture.network.host)}&amp;post=${hash}"`));
+    assert.ok(html.includes(`id="open" href="fatline://open?network=${encodeURIComponent(fixture.network.host)}&amp;post=${hash}"`));
     assert.equal((await fixture.network.fetch("/m/anything")).status, 404);
+  });
+
+  test("tries the app once as it loads, with a script its CSP allows by hash", async () => {
+    const scriptOf = async (hash: string) => {
+      const response = await fixture.network.fetch(`/p/${hash}`);
+      const scripts = [...(await response.text()).matchAll(/<script>([\s\S]*?)<\/script>/g)].map((found) => found[1]!);
+      assert.equal(scripts.length, 1);
+      return { script: scripts[0]!, csp: response.headers.get("content-security-policy") ?? "" };
+    };
+    const { script, csp } = await scriptOf("0x" + "ab".repeat(20));
+    assert.equal(script, OPEN_SCRIPT);
+    // The hash of the text as the browser reads it, between the tags.
+    const hash = createHash("sha256").update(script).digest("base64");
+    assert.equal(csp, `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${hash}'`);
+    // Nothing from the address is in the script, so one hash covers every post's page.
+    assert.deepEqual(await scriptOf("0x" + "cd".repeat(20)), { script, csp });
+  });
+
+  test("Apple's association file is missing without APPLE_APP_ID", async () => {
+    const response = await fixture.network.fetch("/.well-known/apple-app-site-association", { redirect: "manual" });
+    assert.equal(response.status, 404);
   });
 });

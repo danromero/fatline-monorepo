@@ -4,7 +4,7 @@ import { joinMentions } from "../protocol/text.ts";
 import * as admin from "./admin.ts";
 import { roleOf } from "./env.ts";
 import type { Context, Viewer } from "./env.ts";
-import { base64url, decodePart, HttpError, json, problemMessage, sha256Hex } from "./http.ts";
+import { base64url, decodePart, HttpError, json, problemMessage, readBytes, sha256Hex } from "./http.ts";
 import { iconPath, MAX_ICON_BYTES, removeIcon, saveIcon } from "./icon.ts";
 import { settings, usernames } from "./store.ts";
 import { invitePath } from "./invite.ts";
@@ -476,11 +476,20 @@ export async function adminPages(context: Context, request: Request, path: strin
   const { viewer, csrf } = signedIn;
 
   if (request.method === "POST") {
-    const declared = Number(request.headers.get("content-length") ?? 0);
     const origin = request.headers.get("origin");
     const limit = path === "/admin/icon" ? MAX_ICON_BYTES + 16 * 1024 : 16 * 1024;
-    if (declared > limit || (origin !== null && origin !== new URL(request.url).origin)) return signedOutPage(context, "That form came from somewhere else.", 403);
-    const form = await request.formData();
+    const elsewhere = () => signedOutPage(context, "That form came from somewhere else.", 403);
+    if (origin !== null && origin !== new URL(request.url).origin) return elsewhere();
+    // The bytes that arrive are counted, and reading stops past the limit, since a Content-Length can be missing or wrong.
+    let bytes: Uint8Array;
+    try {
+      bytes = await readBytes(request, limit);
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 413) return elsewhere();
+      throw error;
+    }
+    const type = request.headers.get("content-type");
+    const form = await new Response(bytes, { headers: type ? { "content-type": type } : {} }).formData();
     if (form.get("csrf") !== csrf) return signedOutPage(context, "That form has expired. Go back, reload, and try again.", 403);
     if (path === "/admin/logout") {
       await context.db.prepare("DELETE FROM admin_sessions WHERE token = ?").bind(signedIn.token).run();

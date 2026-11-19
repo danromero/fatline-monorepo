@@ -204,7 +204,8 @@ final class FeedModel {
     private static let ownAvatarEvery: TimeInterval = 24 * 60 * 60
 
     private let file: URL
-    private let ownFID: UInt64?
+    /// The account this feed is for, which Debug's report names.
+    let ownFID: UInt64?
     private let ownHandle: String?
     private let fetchFeed: @Sendable (_ refreshing: Bool, _ etag: String?) async throws -> FeedFetch
     private let fetchPeople: @Sendable () async throws -> FeedFetch
@@ -504,6 +505,7 @@ final class FeedModel {
             // With no one to read, there's nothing for the feed to be behind on.
             problem = fetch.age >= Self.staleAfter && !people.isEmpty ? .paused : nil
             releaseHeldPosts()
+            CastImages.feedRead()
             if reason == Self.peopleButton { peopleRefreshFailed = false }
             let shape = fetch.file.map { "updated \($0.casts.count) casts" } ?? "unchanged"
             outcome = "\(shape), age \(Int(fetch.age))s"

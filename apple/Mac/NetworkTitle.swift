@@ -95,7 +95,7 @@ struct TitleSwitcher: View {
                 item.image = NetworkMenuImage.waiting()
                 item.state = host == networks.selectedHost ? .on : .off
                 item.keyEquivalent = ""
-                item.badge = NSMenuItemBadge(string: membership.status == .pending ? "Waiting" : "Not approved")
+                item.badge = NSMenuItemBadge(string: membership.standing ?? "")
             }
             items.append(item)
         }

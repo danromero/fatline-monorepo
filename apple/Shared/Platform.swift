@@ -42,6 +42,16 @@ enum Platform {
         #endif
     }
 
+    /// Where downloaded pictures are cached. It has to be a folder of its own: two caches can't share
+    /// one, and `URLCache.shared` already uses the default.
+    static var pictureCacheFolder: URL {
+        #if os(macOS)
+        URL.cachesDirectory.appending(path: (Bundle.main.bundleIdentifier ?? "Fatline") + E2EProfile.suffix).appending(path: "Pictures")
+        #else
+        URL.cachesDirectory.appending(path: "Pictures" + E2EProfile.suffix)
+        #endif
+    }
+
     @MainActor
     static var reduceMotion: Bool {
         #if os(macOS)

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { connect } from "node:net";
 import { before, describe, test } from "node:test";
 import { newPerson, TEST_PNG } from "../client/local.ts";
 import { gif } from "./handmade.ts";
@@ -27,6 +28,44 @@ describe("admin pages", () => {
       headers: { cookie, "content-type": "application/x-www-form-urlencoded", origin: `http://${fixture.network.host}`, ...headers },
       body: new URLSearchParams(fields).toString(),
     });
+  }
+
+  /** The body as a browser would encode it, sent in pieces, which goes without a Content-Length. */
+  async function submitInPieces(path: string, fields: URLSearchParams | FormData) {
+    const { type, bytes } = await encode(fields);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let at = 0; at < bytes.length; at += 16 * 1024) controller.enqueue(bytes.slice(at, at + 16 * 1024));
+        controller.close();
+      },
+    });
+    return fixture.network.fetch(path, { method: "POST", redirect: "manual", headers: { cookie, "content-type": type, origin: `http://${fixture.network.host}` }, body, duplex: "half" });
+  }
+
+  /** Sends the body chunked, with a Content-Length of 10 as well, over a socket of its own because fetch won't lie. Answers the status. */
+  async function submitWithFalseLength(path: string, fields: URLSearchParams | FormData) {
+    const { type, bytes } = await encode(fields);
+    const head = [`POST ${path} HTTP/1.1`, `host: ${fixture.network.host}`, `cookie: ${cookie}`, `origin: http://${fixture.network.host}`, `content-type: ${type}`,
+      "content-length: 10", "transfer-encoding: chunked", "connection: close", "", ""].join("\r\n");
+    const answer = await new Promise<string>((resolve, reject) => {
+      const socket = connect(Number(new URL(`http://${fixture.network.host}`).port), "127.0.0.1", () => {
+        socket.write(head);
+        socket.write(`${bytes.length.toString(16)}\r\n`);
+        socket.write(bytes);
+        socket.end("\r\n0\r\n\r\n");
+      });
+      let text = "";
+      socket.on("data", (data: Buffer) => (text += data.toString("latin1")));
+      socket.on("end", () => resolve(text));
+      // The server can close as soon as it has answered, before the rest of the body is written.
+      socket.on("error", (error: NodeJS.ErrnoException) => (error.code === "EPIPE" || error.code === "ECONNRESET" ? resolve(text) : reject(error)));
+    });
+    return Number(/^HTTP\/1\.1 (\d{3})/.exec(answer)?.[1]);
+  }
+
+  async function encode(fields: URLSearchParams | FormData) {
+    const encoded = new Request("http://localhost/", { method: "POST", body: fields });
+    return { type: encoded.headers.get("content-type")!, bytes: new Uint8Array(await encoded.arrayBuffer()) };
   }
 
   test("only the admin gets a sign-in link, and it works once", async () => {
@@ -182,6 +221,33 @@ describe("admin pages", () => {
     const saved = await fixture.network.fetch("/admin/icon", { method: "POST", redirect: "manual", headers: { cookie, origin: `http://${fixture.network.host}` }, body: form });
     assert.equal(saved.headers.get("location"), "/admin/settings?message=picture-saved");
     assert.deepEqual(new Uint8Array(await (await fixture.network.fetch("/icon")).arrayBuffer()), file.stripped);
+    assert.equal((await submit("/admin/icon/remove", { csrf })).status, 303);
+  });
+
+  test("a form over the limit is refused by the bytes that arrive, whatever its Content-Length says", async () => {
+    const settings = (pad: number) => new URLSearchParams({ csrf, name: "The Cabin", retention: "forever", pad: "x".repeat(pad) });
+    const picture = (bytes: Uint8Array) => {
+      const form = new FormData();
+      form.set("csrf", csrf);
+      form.set("icon", new File([bytes], "icon", { type: "image/png" }));
+      return form;
+    };
+    const tooBig = new Uint8Array(2_000_000 + 32 * 1024);
+    tooBig.set(TEST_PNG);
+
+    // In pieces, with no Content-Length.
+    assert.equal((await submitInPieces("/admin/settings", settings(20 * 1024))).status, 403);
+    assert.equal((await submitInPieces("/admin/icon", picture(tooBig))).status, 403);
+    // With a Content-Length that says it's short.
+    assert.equal(await submitWithFalseLength("/admin/settings", settings(20 * 1024)), 403);
+    assert.equal(await submitWithFalseLength("/admin/icon", picture(tooBig)), 403);
+    assert.equal((await as(alice).network()).icon, null);
+
+    // Under the limit, both still work.
+    assert.equal(await submitWithFalseLength("/admin/settings", settings(0)), 303);
+    const saved = await submitInPieces("/admin/icon", picture(TEST_PNG));
+    assert.equal(saved.headers.get("location"), "/admin/settings?message=picture-saved");
+    assert.notEqual((await as(alice).network()).icon, null);
     assert.equal((await submit("/admin/icon/remove", { csrf })).status, 303);
   });
 

@@ -33,6 +33,11 @@ export interface Env {
   MINIMUM_MAC_VERSION?: string;
   /** Signs image links. Without it, the network makes one and keeps it in its settings. */
   MEDIA_SECRET?: string;
+  /**
+   * App IDs, such as `ABCDE12345.com.example.fatline`, separated by commas, which may open this network's
+   * post links themselves. With one, the network serves Apple's association file. Without it, links open the page.
+   */
+  APPLE_APP_ID?: string;
   /** Local tests only: where every fetch for avatars and previews goes instead, keeping its path. */
   TEST_FETCH_ORIGIN?: string;
   /**

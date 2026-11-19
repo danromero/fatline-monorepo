@@ -96,7 +96,10 @@ struct AddNetworkFlow: View {
             joiner.model = networks
             joiner.push = { path.append($0) }
             joiner.backToAddress = { path.removeAll() }
+            // Opened by a link to a post in a network this iPhone isn't in.
+            if joiner.address.isEmpty, let link = networks.linkedPost { joiner.address = link.host }
         }
+        .onDisappear(perform: networks.addNetworkClosed)
     }
 
     private func finish(_ result: NetworkModel.JoinResult) {

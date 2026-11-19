@@ -66,6 +66,47 @@ test("keeps an encoded feed cursor exactly as it arrived", async () => {
   assert.equal(calls[0].url, "https://api.neynar.com/v2/farcaster/feed/following/?fid=1&cursor=a%253D");
 });
 
+test("refuses plain HTTP without forwarding it, before anything else", async () => {
+  const requests = [
+    new Request(`http://proxy.example/${SECRET}/v1/castById?fid=1`),
+    new Request(`http://proxy.example/${SECRET}/v1/submitMessage`, { method: "POST", body: new Uint8Array([1]), duplex: "half" }),
+    new Request("http://proxy.example/wrong/v1/castById"),
+  ];
+  for (const plain of requests) {
+    const response = await worker.fetch(plain, env);
+    assert.equal(response.status, 403, plain.url);
+    assert.equal(await response.text(), "This server only answers over HTTPS.");
+  }
+  assert.equal((await worker.fetch(new Request(`http://proxy.example/${SECRET}/v1/castById`), {})).status, 403);
+  assert.equal(calls.length, 0);
+});
+
+test("still answers plain HTTP on this computer, for wrangler dev", async () => {
+  for (const host of ["localhost:8787", "127.0.0.1:8787", "[::1]:8787"]) {
+    const response = await worker.fetch(new Request(`http://${host}/${SECRET}/v1/castById?fid=1`), env);
+    assert.equal(response.status, 200, host);
+    assert.equal(response.headers.get("strict-transport-security"), null, host);
+  }
+  assert.equal(calls.length, 3);
+});
+
+test("adds Strict-Transport-Security over HTTPS and keeps Neynar's answer", async () => {
+  globalThis.fetch = async () => new Response('{"errCode":"not_found"}', {
+    status: 404,
+    headers: { "content-type": "application/json", "strict-transport-security": "max-age=60" },
+  });
+  const forwarded = await worker.fetch(request(`/${SECRET}/v1/castById?fid=1`), env);
+  assert.equal(forwarded.status, 404);
+  assert.equal(forwarded.headers.get("content-type"), "application/json");
+  assert.equal(forwarded.headers.get("strict-transport-security"), "max-age=31536000");
+  assert.equal(await forwarded.text(), '{"errCode":"not_found"}');
+  for (const [path, config, status] of [["/wrong/v1/castById", env, 404], [`/${SECRET}/v1/castById`, {}, 503]]) {
+    const response = await worker.fetch(request(path), config);
+    assert.equal(response.status, status, path);
+    assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000", path);
+  }
+});
+
 test("forwards a signed message byte for byte", async () => {
   await worker.fetch(request(`/${SECRET}/v1/submitMessage`, "POST", new Uint8Array([1, 2, 3])), env);
   assert.equal(calls[0].init.method, "POST");

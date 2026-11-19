@@ -10,6 +10,7 @@
 //
 // Control, with curl, while it runs:
 //   http://127.0.0.1:8799/post?net=pine&text=Hello   a new post, for the dot on the network not showing
+//   http://127.0.0.1:8799/picture?path=/a.jpg&text=Hi a post with that picture, which the network serves as AVIF
 //   http://127.0.0.1:8799/reply?text=Hello           a reply under Cabin's dinner post
 //   http://127.0.0.1:8799/mention?text=Hello         a post that mentions frank, for Activity
 //   http://127.0.0.1:8799/answer?text=Hello          a reply to frank's newest post, for Activity
@@ -34,13 +35,16 @@ import type { Person, TestNetwork } from "./local.ts";
 import type { Post } from "../src/protocol/api.ts";
 
 const KEYS = fileURLToPath(new URL("../.demo/phone/", import.meta.url));
-// Fatline Dev's bundle ID, as Xcode builds it: FATLINE_BUNDLE_ID from apple/Signing.local.xcconfig, plus .dev.
+// Fatline Dev's bundle ID, as Xcode builds it: FATLINE_BUNDLE_ID plus .dev. It comes from
+// apple/Signing.local.xcconfig, or else apple-private/Private.xcconfig in a checkout that has one.
 const DEV_BUNDLE = (() => {
-  try {
-    const local = readFileSync(fileURLToPath(new URL("../../apple/Signing.local.xcconfig", import.meta.url)), "utf8");
-    const id = /^FATLINE_BUNDLE_ID\s*=\s*(\S+)/m.exec(local)?.[1];
-    if (id) return `${id}.dev`;
-  } catch {}
+  for (const path of ["../../apple/Signing.local.xcconfig", "../../apple-private/Private.xcconfig"]) {
+    try {
+      const config = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+      const id = /^FATLINE_BUNDLE_ID[ \t]*=[ \t]*(\S+)/m.exec(config)?.[1];
+      if (id) return `${id}.dev`;
+    } catch {}
+  }
   return "com.example.fatline.dev";
 })();
 const CONTROL = 8799;
@@ -115,6 +119,14 @@ createServer(async (request, response) => {
   try {
     switch (url.pathname) {
       case "/post": response.end(`posted ${await posters[net].post({ text })}\n`); break;
+      case "/picture": {
+        // A post with a picture from a file on this Mac, for checking pictures the way a network serves them (AVIF).
+        const path = url.searchParams.get("path") ?? "";
+        const type = path.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+        const image = await posters[net].uploadImage(readFileSync(path), type);
+        response.end(`posted ${await posters[net].post({ text, embeds: [{ url: image.url }] })}\n`);
+        break;
+      }
       case "/reply": response.end(`replied ${await c.reply({ fid: bob.fid, hash: dinner }, { text })}\n`); break;
       case "/mention":
         response.end(`posted ${await posters[net].post({ text: `@${who.name} ${text}`, handles: new Map([[who.name, who.fid]]) })}\n`);

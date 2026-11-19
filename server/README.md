@@ -78,6 +78,8 @@ In Fatline, choose Advanced, paste the URL, and continue. Then sign in, post a t
 
 The full URL works like a password, because Fatline can't send a key or header to a custom server. Keep it out of logs, screenshots, issues, and shared chats. The output of `wrangler tail` contains it.
 
+Always use the `https://` address. The Worker answers plain `http://` with 403 and forwards nothing, except on your own computer under `wrangler dev`, but by then the path has crossed the network unencrypted, so treat it as exposed. Answers over HTTPS tell browsers to use nothing else.
+
 The Worker has no rate limit or spending cap, so anyone with the URL can spend your credits until the path changes. If it may have been exposed, make a new one:
 
 ```bash

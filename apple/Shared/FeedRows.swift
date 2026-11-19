@@ -118,6 +118,12 @@ private struct CastLinkHotspots: ViewModifier {
 }
 #endif
 
+/// What a picture's load task waits on: its link, and for one that failed, the feed reads since.
+struct PictureTry: Hashable {
+    let url: URL?
+    let round: Int
+}
+
 /// The author's picture, or their initials until it loads or when there isn't one.
 struct CastAvatar: View {
     let url: URL?
@@ -125,6 +131,7 @@ struct CastAvatar: View {
     var background = FatlineStyle.quiet
     var size = FatlineStyle.avatarSize
     @State private var loaded: CGImage?
+    @State private var failed = false
 
     private static let maxPixels = 128
 
@@ -140,32 +147,39 @@ struct CastAvatar: View {
                 Text(String(handle.filter(\.isLetter).prefix(2)).uppercased())
                     .font(FatlineStyle.metaStrong)
                     .foregroundStyle(FatlineStyle.secondary)
+                    // The circle doesn't grow with Dynamic Type, so neither do its initials.
+                    .dynamicTypeSize(...DynamicTypeSize.large)
             }
         }
         .frame(width: size, height: size)
         .background(background)
         .clipShape(.circle)
-        .task(id: url) {
-            guard let url else { return }
+        // One that failed tries again after the next feed read.
+        .task(id: PictureTry(url: url, round: failed ? CastImages.retryRound : 0)) {
+            guard let url, image == nil else { return }
             loaded = await CastImages.load(url, maxPixels: Self.maxPixels)
+            failed = loaded == nil
         }
     }
 }
 
-/// A picture attached to a cast. Clicking it opens the full image in the browser.
+/// A picture attached to a cast. Tapping it on iPhone opens the cast's pictures full screen.
+/// Clicking it on a Mac opens the full image in the browser.
 private struct CastPicture: View {
     let url: URL
+    /// Opens the picture viewer, on iPhone.
+    var open: () -> Void = {}
     @State private var loaded: CGImage?
     @State private var failed = false
 
-    private static let maxPixels = 1400
+    private static let maxPixels = CastImages.feedPicturePixels
     private static let placeholderRatio: CGFloat = 4 / 3
     /// The tallest a picture's box gets. A taller picture is shown whole inside it.
     private static let tallestRatio: CGFloat = 4 / 5
 
     var body: some View {
         let image = loaded ?? CastImages.cached(url, maxPixels: Self.maxPixels)
-        Link(destination: url) {
+        opener {
             if failed && image == nil {
                 Text("Image unavailable")
                     .font(FatlineStyle.meta)
@@ -182,7 +196,7 @@ private struct CastPicture: View {
                                 .scaledToFit()
                         }
                     }
-                    .clipShape(.rect(cornerRadius: FatlineStyle.cardRadius))
+                    .clipShape(.rect(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
                     .contentShape(.rect)
             }
         }
@@ -191,11 +205,20 @@ private struct CastPicture: View {
         .pointerStyle(.link)
         #endif
         .accessibilityLabel("Open image")
-        .task(id: url) {
+        // One that failed tries again after the next feed read.
+        .task(id: PictureTry(url: url, round: failed ? CastImages.retryRound : 0)) {
             guard image == nil else { return }
             loaded = await CastImages.load(url, maxPixels: Self.maxPixels)
             failed = loaded == nil
         }
+    }
+
+    @ViewBuilder private func opener<Label: View>(@ViewBuilder _ label: () -> Label) -> some View {
+        #if os(iOS)
+        Button(action: open, label: label)
+        #else
+        Link(destination: url, label: label)
+        #endif
     }
 
     private static func ratio(_ image: CGImage) -> CGFloat {
@@ -216,6 +239,13 @@ struct CastRow: View {
     var badge: String? = nil
     /// Whose post a reply in the feed answers, for the line under the name.
     var replyingTo: String? = nil
+
+    #if os(iOS)
+    @State private var viewingPictures = false
+    /// The picture showing in the viewer, which it zooms back into when it closes.
+    @State private var picture = 0
+    @Namespace private var pictureZoom
+    #endif
 
     /// On a Mac the links inside a cast's text are separate controls, which combining would hide.
     private var hasTextLinks: Bool {
@@ -250,9 +280,12 @@ struct CastRow: View {
                 if !cast.text.isEmpty {
                     CastBodyText(text: cast.text)
                 }
-                ForEach(images, id: \.self) { url in
-                    CastPicture(url: url)
+                ForEach(images.indices, id: \.self) { index in
+                    CastPicture(url: images[index]) { openPicture(index) }
                         #if os(iOS)
+                        .matchedTransitionSource(id: index, in: pictureZoom) {
+                            $0.clipShape(RoundedRectangle(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
+                        }
                         // 8 under the text, and the row's own padding under the picture.
                         .padding(.top, FatlineStyle.castGap)
                         #else
@@ -301,6 +334,20 @@ struct CastRow: View {
         .background(highlighted ? FatlineStyle.quiet : FatlineStyle.paper)
         .contentShape(.rect)
         .accessibilityElement(children: links.isEmpty && images.isEmpty && !hasTextLinks ? .combine : .contain)
+        #if os(iOS)
+        .fullScreenCover(isPresented: $viewingPictures) {
+            PictureViewer(urls: images, index: $picture)
+                .navigationTransition(.zoom(sourceID: picture, in: pictureZoom))
+        }
+        #endif
+    }
+
+    /// Opens the post's pictures full screen, at the one tapped. A Mac opens the browser instead.
+    private func openPicture(_ index: Int) {
+        #if os(iOS)
+        picture = index
+        viewingPictures = true
+        #endif
     }
 
     /// The name, bold, and what they did, in regular weight. One text, so a long line wraps as a sentence.
@@ -344,7 +391,9 @@ struct SectionLabel: View {
     }
 }
 
-/// The round plus's face, on both apps: lit from above, with one soft shadow under it.
+#if os(macOS)
+/// The Mac's round plus: lit from above, with one soft shadow under it. iPhone's Compose is the
+/// system's prominent glass button in the top bar.
 struct PlusFace: View {
     var body: some View {
         Image(systemName: "plus")
@@ -358,6 +407,7 @@ struct PlusFace: View {
             .shadow(color: FatlineStyle.floatShadow, radius: 12, y: 8) // layout-ok: the plus's shadow, as on the canvas
     }
 }
+#endif
 
 /// Stays above the feed until the problem clears, because a feed that's quietly old looks like a quiet
 /// day. Clicking or tapping it asks again. It uses the same columns as a cast row, with the mark where an avatar goes.

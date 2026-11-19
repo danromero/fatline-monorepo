@@ -6,6 +6,7 @@ import SwiftUI
 struct NetworkProfileView: View {
     @Environment(NetworkModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var name = ""
     @State private var bio = ""
     @State private var saving = false
@@ -24,7 +25,8 @@ struct NetworkProfileView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Profile").fatlineScreenTitle()
-                HStack(spacing: FatlineStyle.groupGap) {
+                // At the largest text sizes Change Picture goes under the picture, so it isn't cut off.
+                pictureLayout {
                     picture
                     VStack(alignment: .leading, spacing: FatlineStyle.castGap) {
                         let pictureTitle = changingPicture ? "Changing…" : "Change Picture"
@@ -99,6 +101,12 @@ struct NetworkProfileView: View {
         }
     }
 
+    private var pictureLayout: AnyLayout {
+        typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: FatlineStyle.groupGap))
+            : AnyLayout(HStackLayout(spacing: FatlineStyle.groupGap))
+    }
+
     /// The picture, or initials until there is one.
     private var picture: some View {
         ZStack {
@@ -109,6 +117,8 @@ struct NetworkProfileView: View {
                 Text(String((model.you?.username ?? "").filter(\.isLetter).prefix(2)).uppercased())
                     .font(FatlineStyle.bodyStrong)
                     .foregroundStyle(FatlineStyle.secondary)
+                    // The circle doesn't grow with Dynamic Type, so neither do its initials.
+                    .dynamicTypeSize(...DynamicTypeSize.large)
             }
             if changingPicture { ProgressView().controlSize(.small) }
         }

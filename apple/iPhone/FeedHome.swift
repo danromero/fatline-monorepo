@@ -3,10 +3,10 @@ import UIKit
 
 /// Where the Farcaster feed's Settings has gone.
 enum FarcasterSettingsRoute: Hashable {
-    case people, connection
+    case people, connection, debug, checks, log
 }
 
-/// The Farcaster feed and its Settings, under the floating bar.
+/// The Farcaster feed, with no tab bar since it has only Home, and Settings from the network menu.
 struct FeedHome: View {
     let username: String?
     /// True right after signing in, which is when the follow list is read from the network.
@@ -23,34 +23,33 @@ struct FeedHome: View {
     let compose: () -> Void
     let signOut: () throws -> Void
     let deleteCast: (FeedCast) async throws -> Void
-    /// Opens the Networks sheet from the title. With no network yet, the sheet is the way to add one.
-    let switchNetwork: () -> Void
+    /// Starts joining a network, from the network menu. With no network yet, that's the way to add one.
+    let addNetwork: () -> Void
+    /// Shared with the composer's cover at the root, which zooms out of Compose.
+    let composeZoom: Namespace.ID
     let othersHaveNews: Bool
-    /// The Sent toast, which sits just above the bar.
+    /// The Sent toast, which sits just above Compose.
     let toast: AnyView
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @State private var model: FeedModel
-    @State private var tab = FatlineTab.home
-    /// Settings is made the first time it shows, and then kept.
-    @State private var openedSettings = false
     @State private var settingsPath: [FarcasterSettingsRoute] = []
-    @State private var stage = ScrollStage.top
+    @State private var showingSettings = false
     @State private var confirmingDelete: FeedCast?
     @State private var deleting: Set<String> = []
     @State private var deleteError: String?
     @State private var showDeleteHelp = false
 
     private static let feedTop = "feed-top"
-    /// Where a cast the feed scrolls to comes to rest: under the title's capsule, not behind it.
-    private static let restAnchor = UnitPoint(x: 0.5, y: 0.08)
+    /// Where a cast the feed scrolls to comes to rest: at the top, under the bar.
+    private static let restAnchor = UnitPoint.top
 
     init(directory: URL, fid: UInt64, username: String?, signedIn: Bool, signOutBlock: String?, notice: String?, latestPost: FeedCast?,
          canDelete: Bool, connectionName: String, savedConnection: ConnectionChoice?,
          changeConnection: @escaping (ConnectionChoice) throws -> Void, compose: @escaping () -> Void,
          signOut: @escaping () throws -> Void, deleteCast: @escaping (FeedCast) async throws -> Void,
-         switchNetwork: @escaping () -> Void, othersHaveNews: Bool = false, toast: AnyView = AnyView(EmptyView())) {
+         addNetwork: @escaping () -> Void, composeZoom: Namespace.ID, othersHaveNews: Bool = false, toast: AnyView = AnyView(EmptyView())) {
         _model = State(initialValue: FeedModel(directory: directory, ownFID: fid, ownHandle: username))
         self.username = username
         self.signedIn = signedIn
@@ -64,7 +63,8 @@ struct FeedHome: View {
         self.compose = compose
         self.signOut = signOut
         self.deleteCast = deleteCast
-        self.switchNetwork = switchNetwork
+        self.addNetwork = addNetwork
+        self.composeZoom = composeZoom
         self.othersHaveNews = othersHaveNews
         self.toast = toast
     }
@@ -72,23 +72,13 @@ struct FeedHome: View {
     private var picture: URL? { model.ownAvatarLink.flatMap(FeedCast.imageURL) }
 
     var body: some View {
-        FatlineTabShell(
-            tab: $tab, tabs: [.home, .settings], showsBar: tab == .home || settingsPath.isEmpty,
-            picture: picture, handle: username ?? "", compose: compose
-        ) {
-            ZStack {
-                feed.tabPage(.home, showing: tab)
-                if openedSettings || tab == .settings {
-                    settings.tabPage(.settings, showing: tab)
-                }
+        // One screen, so no tab bar. Compose sits where it does on a network, beside where the bar would be.
+        home
+            .tint(FatlineStyle.action)
+            .overlay {
+                ComposeButton(zoom: composeZoom, action: compose)
             }
-        }
-        .onChange(of: tab) { _, tab in
-            if tab == .settings { openedSettings = true }
-        }
-        .background(FatlineStyle.paper.ignoresSafeArea())
-        .foregroundStyle(FatlineStyle.ink)
-        .tint(FatlineStyle.action)
+        .sheet(isPresented: $showingSettings) { settings }
         .task { await model.start(signedIn: signedIn) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refreshIfStale() } } else { model.savePlace() }
@@ -115,14 +105,15 @@ struct FeedHome: View {
         }
     }
 
+    /// Settings, from the network menu, as a sheet with its own navigation.
     private var settings: some View {
         NavigationStack(path: $settingsPath) {
-            FarcasterSettings(
-                model: model, username: username, picture: picture, connectionName: connectionName,
-                signOutBlock: signOutBlock, signOut: signOut
-            ) { settingsPath.append($0) }
-                .underBar()
-                .toolbar(.hidden, for: .navigationBar)
+            SettingsSheet {
+                FarcasterSettings(
+                    model: model, username: username, picture: picture, connectionName: connectionName,
+                    signOutBlock: signOutBlock, signOut: signOut
+                ) { settingsPath.append($0) }
+            }
                 .navigationDestination(for: FarcasterSettingsRoute.self) { route in
                     switch route {
                     case .people:
@@ -132,6 +123,33 @@ struct FeedHome: View {
                             try changeConnection(choice)
                             settingsPath = []
                         }
+                    case .debug:
+                        DebugView(scope: LaunchLog.farcaster) { next in
+                            settingsPath.append(next == .checks ? .checks : .log)
+                        }
+                    case .checks:
+                        ChecksView(.farcaster(model: model, keyNotice: notice))
+                    case .log:
+                        LaunchLogView(place: "Farcaster", scope: LaunchLog.farcaster)
+                    }
+                }
+        }
+    }
+
+    /// The feed under the system's top bar: Home, small and centered, and Farcaster's mark at the top
+    /// left opening the network menu, which is also the way to add a first network.
+    private var home: some View {
+        NavigationStack {
+            feed
+                // Room for Compose, as a tab bar would leave, so the last cast and the toast clear it.
+                .safeAreaPadding(.bottom, FatlineStyle.tabBarHeight)
+                .background(FatlineStyle.paper.ignoresSafeArea())
+                .foregroundStyle(FatlineStyle.ink)
+                .fatlineTitle("Home")
+                .toolbar {
+                    FeedBar(name: "Farcaster", label: menuLabel, addNetwork: addNetwork, openSettings: { showingSettings = true }) {
+                        FarcasterMark(size: FatlineStyle.toolbarMark)
+                            .unreadDot(othersHaveNews, inset: -3) // layout-ok: the dot sits over the mark's corner, as on a network's mark
                     }
                 }
         }
@@ -140,88 +158,85 @@ struct FeedHome: View {
     private var feed: some View {
         let casts = model.casts
         let marker = model.marker(in: casts)
-        return VStack(spacing: 0) {
-            if let problem = model.problem, !casts.isEmpty {
-                FeedProblemBanner(problem: problem, lastChecked: model.lastChecked, checking: model.loading) {
-                    Platform.haptic(.tap)
-                    Task { await model.refresh(reason: "pull") }
-                }
-                FatlineDivider()
-            }
-            ScrollViewReader { scroller in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        header
+        return ScrollViewReader { scroller in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    CastDivider()
+                    if let notice {
+                        FeedMessage(text: notice)
                         CastDivider()
-                        if let notice {
-                            FeedMessage(text: notice)
-                            CastDivider()
-                        }
-                        if let status = model.status, !casts.isEmpty {
-                            FeedMessage(text: status)
-                            CastDivider()
-                        }
-                        ForEach(casts) { cast in
-                            // One view per cast, so the feed can tell which cast is at the top of the screen.
-                            VStack(spacing: 0) {
-                                if cast.id == marker { FeedMarker() }
-                                let handle = model.handle(for: cast.fid)
-                                CastRow(cast: cast, handle: handle)
-                                    .opacity(deleting.contains(cast.hash) ? 0.4 : 1)
-                                    .contextMenu { menu(for: cast, handle: handle) }
-                                    .accessibilityIdentifier("feed-cast")
-                                if cast.id != casts.last?.id { CastDivider() }
-                            }
+                    }
+                    if let status = model.status, !casts.isEmpty {
+                        FeedMessage(text: status)
+                        CastDivider()
+                    }
+                    ForEach(casts) { cast in
+                        // One view per cast, so the feed can tell which cast is at the top of the screen.
+                        VStack(spacing: 0) {
+                            if cast.id == marker { FeedMarker() }
+                            let handle = model.handle(for: cast.fid)
+                            CastRow(cast: cast, handle: handle)
+                                .opacity(deleting.contains(cast.hash) ? 0.4 : 1)
+                                .contextMenu { menu(for: cast, handle: handle) }
+                                .accessibilityIdentifier("feed-cast")
+                            if cast.id != casts.last?.id { CastDivider() }
                         }
                     }
-                    .scrollTargetLayout()
-                    .id(Self.feedTop)
                 }
-                .scrollStage($stage)
-                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.2) { visible in
-                    let visible = Set(visible)
-                    if let top = casts.first(where: { visible.contains($0.id) }) { model.sawTop(top) }
-                }
-                .onChange(of: model.opening, initial: true) { _, cast in
-                    guard let cast else { return }
-                    // After this pass, so the saved casts are laid out before the scroll.
-                    Task {
-                        // The marker is part of the cast's own view, so it shows at the top when it's there.
-                        scroller.scrollTo(cast, anchor: Self.restAnchor)
-                        model.opened()
-                    }
-                }
-                .onChange(of: casts.first?.id) { old, _ in
-                    // New casts go in above. Unless the reader was at the top, keep what they were reading in place.
-                    guard let reading = model.reading, reading != old else { return }
-                    scroller.scrollTo(reading, anchor: Self.restAnchor)
-                }
-                .onChange(of: latestPost) { _, post in
-                    guard let post else { return }
-                    model.addPosted(post)
-                    model.sawTop(post)
-                    scroller.scrollTo(Self.feedTop, anchor: .top)
-                    Task { await model.refresh(reason: "post") }
+                .scrollTargetLayout()
+                .id(Self.feedTop)
+            }
+            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.2) { visible in
+                let visible = Set(visible)
+                if let top = casts.first(where: { visible.contains($0.id) }) { model.sawTop(top) }
+            }
+            .onChange(of: model.opening, initial: true) { _, cast in
+                guard let cast else { return }
+                // After this pass, so the saved casts are laid out before the scroll.
+                Task {
+                    // The marker is part of the cast's own view, so it shows at the top when it's there.
+                    scroller.scrollTo(cast, anchor: Self.restAnchor)
+                    model.opened()
                 }
             }
-            .overlay {
-                if casts.isEmpty {
-                    Text(emptyMessage)
-                        .font(FatlineStyle.body)
-                        .foregroundStyle(FatlineStyle.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, FatlineStyle.gutter)
-                        .allowsHitTesting(false)
-                }
+            .onChange(of: casts.first?.id) { old, _ in
+                // New casts go in above. Unless the reader was at the top, keep what they were reading in place.
+                guard let reading = model.reading, reading != old else { return }
+                scroller.scrollTo(reading, anchor: Self.restAnchor)
             }
-            .refreshable { await model.refresh(reason: "pull") }
-            .overlay(alignment: .bottom) { toast }
-            .scrollFade(stage)
-            .titleCapsule("Farcaster", news: othersHaveNews, label: switchLabel, shown: stage == .past, action: switchNetwork) {
-                FarcasterMark(size: FatlineStyle.titleCapsuleMark)
+            .onChange(of: latestPost) { _, post in
+                guard let post else { return }
+                model.addPosted(post)
+                model.sawTop(post)
+                scroller.scrollTo(Self.feedTop, anchor: .top)
+                Task { await model.refresh(reason: "post") }
             }
         }
-        .underBar()
+        // Stays under the title until the problem clears.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let problem = model.problem, !casts.isEmpty {
+                VStack(spacing: 0) {
+                    FeedProblemBanner(problem: problem, lastChecked: model.lastChecked, checking: model.loading) {
+                        Platform.haptic(.tap)
+                        Task { await model.refresh(reason: "pull") }
+                    }
+                    FatlineDivider()
+                }
+                .background(FatlineStyle.paper)
+            }
+        }
+        .overlay {
+            if casts.isEmpty {
+                Text(emptyMessage)
+                    .font(FatlineStyle.body)
+                    .foregroundStyle(FatlineStyle.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, FatlineStyle.gutter)
+                    .allowsHitTesting(false)
+            }
+        }
+        .refreshable { await model.refresh(reason: "pull") }
+        .overlay(alignment: .bottom) { toast.padding(.bottom, FatlineStyle.gutter) }
     }
 
     /// The long-press menu on a cast.
@@ -273,20 +288,12 @@ struct FeedHome: View {
         return "No recent casts."
     }
 
-    /// Farcaster where a network's name goes, with your name under it. It opens the Networks sheet,
-    /// which is also the way to add a first network.
-    private var header: some View {
-        ScreenHeader(title: "Farcaster", meta: username, news: othersHaveNews, actionLabel: switchLabel, action: switchNetwork) {
-            FarcasterMark()
-        }
-    }
-
-    private var switchLabel: String {
-        "Farcaster. Switch network" + (othersHaveNews ? ", news in another network" : "")
+    private var menuLabel: String {
+        "Farcaster. Networks and Settings" + (othersHaveNews ? ", news in another network" : "")
     }
 }
 
-/// Settings for Farcaster, in the bar's last tab: you, People, Connection, and diagnostics. Sign Out
+/// Settings for Farcaster, from the network menu: you, People, Connection, then Debug and the version. Sign Out
 /// sits apart at the bottom and asks first, so it's hard to reach by accident.
 private struct FarcasterSettings: View {
     let model: FeedModel
@@ -299,16 +306,17 @@ private struct FarcasterSettings: View {
 
     @State private var confirmingSignOut = false
     @State private var signOutError: String?
-    @State private var copied = false
-    @State private var stage = ScrollStage.top
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                ScreenHeader(title: username ?? "Settings", meta: "Farcaster") {
-                    CastAvatar(url: picture, handle: username ?? "")
-                }
                 CastDivider()
+                if let username {
+                    IdentityRow(title: username, meta: "Farcaster") {
+                        CastAvatar(url: picture, handle: username)
+                    }
+                    CastDivider()
+                }
                 Button { open(.people) } label: { SettingsRow(symbol: "person.2", title: "People") }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("settings-people")
@@ -319,49 +327,19 @@ private struct FarcasterSettings: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("settings-connection")
                 TextColumnDivider()
-                diagnostics
+                // Run Checks, the Launch Log, and the build. Copy Diagnostics' lines are in its report.
+                DebugSettingsEntry { open(.debug) }
             }
         }
-        .scrollStage($stage)
         .scrollBounceBehavior(.basedOnSize)
         .safeAreaInset(edge: .bottom, spacing: 0) { signOutSection }
-        .scrollFade(stage)
         .foregroundStyle(FatlineStyle.ink)
         .background(FatlineStyle.paper.ignoresSafeArea())
+        .fatlineTitle("Settings")
         .alert("Couldn’t sign out", isPresented: Binding(get: { signOutError != nil }, set: { if !$0 { signOutError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(signOutError ?? "")
-        }
-    }
-
-    private var diagnostics: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                UIPasteboard.general.string = model.diagnostics
-                Platform.haptic(.tap)
-                copied = true
-                UIAccessibility.post(notification: .announcement, argument: "Diagnostics copied")
-            } label: {
-                SettingsRow(symbol: "doc.on.doc", title: copied ? "Copied" : "Copy Diagnostics", trailing: nil)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("copy-diagnostics")
-            .task(id: copied) {
-                guard copied else { return }
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
-                copied = false
-            }
-            VStack(alignment: .leading, spacing: FatlineStyle.castGap) {
-                Text("Paste into a message or TestFlight feedback. Includes your Farcaster ID and feed loading results, but no keys, drafts, or cast text.")
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(verbatim: FeedModel.versionLine)
-            }
-            .font(FatlineStyle.meta)
-            .foregroundStyle(FatlineStyle.secondary)
-            .padding(.leading, FatlineStyle.textColumn)
-            .padding(.trailing, FatlineStyle.gutter)
-            .padding(.bottom, FatlineStyle.rowPadding)
         }
     }
 
@@ -403,7 +381,6 @@ private struct PeopleList: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FatlineDivider()
             ScrollView {
                 VStack(spacing: 0) {
                     if let message = error ?? (model.peopleRefreshFailed ? "Couldn’t refresh. Try again in a minute." : nil) {

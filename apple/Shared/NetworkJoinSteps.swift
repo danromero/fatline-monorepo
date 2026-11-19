@@ -319,7 +319,7 @@ struct NetworkSetupChoiceStep: View {
             }
         } else {
             card(.existing(membership.host), title: membership.host,
-                 detail: membership.status == .pending ? "Waiting" : "Not approved", dimmed: true) { emptyMark }
+                 detail: membership.standing, dimmed: true) { emptyMark }
         }
     }
 

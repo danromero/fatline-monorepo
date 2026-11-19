@@ -33,8 +33,21 @@ struct NetworkMembership: Codable, Hashable, Identifiable, Sendable {
     /// A link to this account's Farcaster picture, which the app uploads once the network lets it in,
     /// and then forgets.
     var farcasterPicture: String?
+    /// True once the network has let this account in, so a refusal after that reads as being removed.
+    var wasApproved: Bool?
 
     var id: String { host }
+    /// Refused after being let in: the admin removed this account. Only a member has a name for the
+    /// network, which covers memberships saved before `wasApproved`.
+    var removed: Bool { status == .refused && (wasApproved == true || name != nil) }
+    /// Where a network that hasn't let you in stands, for menus and lists.
+    var standing: String? {
+        switch status {
+        case .approved: nil
+        case .pending: "Waiting"
+        case .refused: removed ? "Removed" : "Not approved"
+        }
+    }
     var title: String { name ?? host }
     /// The name with the host beside it, for menus and Settings, so a network can't pass for another.
     var label: String { name.map { "\($0) · \(host)" } ?? host }
@@ -297,12 +310,61 @@ struct NetworkInvite: Decodable, Hashable, Sendable {
 }
 
 /// Talks to one network's server as this device.
+/// Network reads kept in memory with their ETags, by address, for `If-None-Match`. An unchanged feed
+/// then costs the network one database row and sends nothing back. A network's answers name the
+/// viewer and change at least each hour, as its picture links do.
+final class NetworkAnswers: @unchecked Sendable {
+    struct Kept {
+        let etag: String
+        let data: Data
+    }
+
+    static let shared = NetworkAnswers()
+    /// Each network's feed and activity, plus the threads opened lately.
+    static let limit = 64
+
+    private let lock = NSLock()
+    private var kept: [String: Kept] = [:]
+    /// Least recently used first.
+    private var order: [String] = []
+
+    func answer(_ address: String) -> Kept? {
+        lock.withLock {
+            guard let found = kept[address] else { return nil }
+            order.removeAll { $0 == address }
+            order.append(address)
+            return found
+        }
+    }
+
+    func keep(_ address: String, etag: String, data: Data) {
+        lock.withLock {
+            kept[address] = Kept(etag: etag, data: data)
+            order.removeAll { $0 == address }
+            order.append(address)
+            while order.count > Self.limit { kept[order.removeFirst()] = nil }
+        }
+    }
+
+    func forget(_ address: String) {
+        lock.withLock {
+            kept[address] = nil
+            order.removeAll { $0 == address }
+        }
+    }
+}
+
 struct NetworkClient: Sendable {
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
     let membership: NetworkMembership
     /// How requests go out: the shared HTTP session, or a stand-in in tests.
     var transport: Transport = { try await HTTP.loadResponse($0) }
+    /// How long a read that dropped waits before going again.
+    var retryDelay: Duration = .seconds(2)
+    /// Reads kept with their ETag, so asking again sends `If-None-Match` and an unchanged page comes
+    /// back as a `304` with nothing in it.
+    var answers: NetworkAnswers = .shared
 
     private var base: URL { NetworkMessages.origin(membership.host).appending(path: "api/v1") }
 
@@ -340,7 +402,8 @@ struct NetworkClient: Sendable {
               code.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) && $0.isASCII || "-._~".unicodeScalars.contains($0) })
         else { return nil }
         let nobody = NetworkMembership(host: host, fid: 0, key: Data(), issued: 0, approval: "", status: .pending)
-        let (data, status) = try await NetworkClient(membership: nobody).send("GET", "invites/\(code)", token: nil)
+        let (data, response) = try await NetworkClient(membership: nobody).send("GET", "invites/\(code)", token: nil)
+        let status = response.statusCode
         switch status {
         case 200: return try NetworkInvite(data: data)
         case 404: return nil
@@ -359,12 +422,14 @@ struct NetworkClient: Sendable {
             "fid": membership.fid, "networkKey": try membership.signingKey.publicKey.rawRepresentation.hex,
             "issued": issued, "nonce": nonce, "signature": signature,
         ]
-        let (data, status) = try await send("POST", "session", json: body, token: nil)
+        let (data, response) = try await send("POST", "session", json: body, token: nil)
+        let status = response.statusCode
         switch status {
         case 200:
             struct Session: Decodable { let token: String; let expires: Int64 }
             let session = try JSONDecoder().decode(Session.self, from: data)
             updated.status = .approved
+            updated.wasApproved = true
             updated.token = session.token
             updated.expires = session.expires
         case 202: updated.status = .pending
@@ -392,11 +457,22 @@ struct NetworkClient: Sendable {
         return NetworkPost.kept(page.posts, limit: NetworkLimits.page)
     }
 
+    /// A post and its replies, oldest first. Replies come a page at a time, newest page first (200 to
+    /// a page since round seven), so this follows `next` back for the older ones, up to the limit.
     func thread(_ hash: String) async throws -> (post: NetworkPost, replies: [NetworkPost]) {
-        struct Thread: Decodable { let post: NetworkPost; let replies: [NetworkPost] }
+        struct Thread: Decodable { let post: NetworkPost; let replies: [NetworkPost]; let next: String? }
         let thread: Thread = try await call("GET", "posts/\(hash)")
         guard thread.post.fitsLimits else { throw Self.unreadable }
-        return (thread.post, NetworkPost.kept(thread.replies, limit: NetworkLimits.replies))
+        var replies = thread.replies
+        var next = thread.next
+        var seen: Set<String> = []
+        while let cursor = next, replies.count < NetworkLimits.replies, seen.insert(cursor).inserted {
+            let older: Thread = try await call("GET", "posts/\(hash)", query: [URLQueryItem(name: "cursor", value: cursor)])
+            guard !older.replies.isEmpty else { break }
+            replies = older.replies + replies
+            next = older.next
+        }
+        return (thread.post, NetworkPost.kept(Array(replies.suffix(NetworkLimits.replies)), limit: NetworkLimits.replies))
     }
 
     func activity() async throws -> [NetworkActivity.Item] {
@@ -526,22 +602,41 @@ struct NetworkClient: Sendable {
 
     private func expectNoContent(_ method: String, _ path: String, json: [String: Any]? = nil) async throws {
         if membership.token == nil { throw NetworkError.notSignedIn }
-        let (data, status) = try await send(method, path, json: json, token: membership.token)
-        guard (200..<300).contains(status) else { throw Self.error(status: status, data: data) }
+        let (data, response) = try await send(method, path, json: json, token: membership.token)
+        guard (200..<300).contains(response.statusCode) else { throw Self.error(status: response.statusCode, data: data) }
     }
 
     private func call<Answer: Decodable>(_ method: String, _ path: String, query: [URLQueryItem] = [], json: [String: Any]? = nil,
                                          bytes: Data? = nil, contentType: String? = nil, headers: [String: String] = [:],
                                          signedIn: Bool = true) async throws -> Answer {
         if signedIn && membership.token == nil { throw NetworkError.notSignedIn }
-        let (data, status) = try await send(method, path, query: query, json: json, bytes: bytes, contentType: contentType,
-                                            headers: headers, token: signedIn ? membership.token : nil)
-        guard (200..<300).contains(status) else { throw Self.error(status: status, data: data) }
+        // A signed-in read is kept by its address, for this account on this network.
+        let address = method == "GET" && signedIn ? "\(membership.fid)@\(membership.host)/\(path)?\(query.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&"))" : nil
+        let kept = address.flatMap(answers.answer)
+        var headers = headers
+        if let kept { headers["if-none-match"] = kept.etag }
+        let (sent, response) = try await send(method, path, query: query, json: json, bytes: bytes, contentType: contentType,
+                                              headers: headers, token: signedIn ? membership.token : nil)
+        let data: Data
+        if response.statusCode == 304, let kept {
+            // Unchanged since the kept copy, which the network didn't send again.
+            data = kept.data
+        } else if (200..<300).contains(response.statusCode) {
+            data = sent
+        } else {
+            throw Self.error(status: response.statusCode, data: sent)
+        }
+        let answer: Answer
         do {
-            return try JSONDecoder().decode(Answer.self, from: data)
+            answer = try JSONDecoder().decode(Answer.self, from: data)
         } catch {
+            if let address { answers.forget(address) }
             throw Self.unreadable
         }
+        if let address, response.statusCode == 200, let etag = response.value(forHTTPHeaderField: "etag") {
+            answers.keep(address, etag: etag, data: data)
+        }
+        return answer
     }
 
     private static let unreadable = NetworkError.server(status: 0, message: "The network sent something Fatline couldn’t read.")
@@ -557,7 +652,7 @@ struct NetworkClient: Sendable {
     }()
 
     private func send(_ method: String, _ path: String, query: [URLQueryItem] = [], json: [String: Any]? = nil, bytes: Data? = nil,
-                      contentType: String? = nil, headers: [String: String] = [:], token: String?) async throws -> (Data, Int) {
+                      contentType: String? = nil, headers: [String: String] = [:], token: String?) async throws -> (Data, HTTPURLResponse) {
         let url = base.appending(path: path)
         var request = URLRequest(url: query.isEmpty ? url : url.appending(queryItems: query), cachePolicy: .reloadIgnoringLocalCacheData,
                                  timeoutInterval: bytes.map { $0.count > 1_000_000 ? 120 : 30 } ?? 30)
@@ -573,10 +668,25 @@ struct NetworkClient: Sendable {
             request.httpBody = bytes
         }
         do {
-            let (data, response) = try await transport(request)
-            return (data, response.statusCode)
+            return try await deliver(request)
         } catch {
+            // A request the app called off, such as when a screen closes, isn't the network being down.
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
             throw NetworkError.unreachable
+        }
+    }
+
+    /// Errors where a request never got to the network, as the first one after the app comes back often doesn't.
+    private static let dropped: Set<URLError.Code> = [.networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost,
+                                                      .cannotFindHost, .dnsLookupFailed]
+
+    /// Sends a read once more, shortly, if it dropped on the way. Writes go once, since the first may have arrived.
+    private func deliver(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        do {
+            return try await transport(request)
+        } catch let error as URLError where request.httpMethod == "GET" && Self.dropped.contains(error.code) {
+            try await Task.sleep(for: retryDelay)
+            return try await transport(request)
         }
     }
 

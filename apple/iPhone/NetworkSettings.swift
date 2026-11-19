@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Settings for the network that's showing, in the bar's last tab: you there with the network's name
-/// and address, then Profile, Members, and Manage Network for admins, the version, and Leave at the
-/// bottom, apart so it's hard to reach by accident. A network that hasn't let you in has only Remove
-/// from This iPhone. It follows the Farcaster Settings row for row.
+/// Settings for the network that's showing, the last tab: you there with the network's name and
+/// address, then Profile, Members, and Manage Network for admins, Debug and the version, and Leave at
+/// the bottom, apart so it's hard to reach by accident. A network that hasn't let you in has Debug and
+/// Remove from This iPhone. It follows the Farcaster Settings row for row.
 struct NetworkSettingsView: View {
     let membership: NetworkMembership
     let open: (NetworkSettingsRoute) -> Void
@@ -15,7 +15,6 @@ struct NetworkSettingsView: View {
     @State private var problem: String?
     @State private var confirmingLeave = false
     @State private var leaving = false
-    @State private var stage = ScrollStage.top
 
     private var approved: Bool { membership.status == .approved }
     private var handle: String { model.you?.handle ?? model.handle(for: membership.fid) }
@@ -24,16 +23,12 @@ struct NetworkSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                // The network's name and address under yours, so a network can't pass for another.
-                ScreenHeader(title: approved ? handle : membership.host, meta: approved ? membership.label : nil) {
-                    if approved {
-                        CastAvatar(url: picture, handle: handle)
-                    } else {
-                        NetworkWaitingMark()
-                    }
-                }
                 CastDivider()
                 if approved {
+                    IdentityRow(title: handle, meta: membership.host) {
+                        CastAvatar(url: picture, handle: handle)
+                    }
+                    CastDivider()
                     Button { open(.profile) } label: { SettingsRow(symbol: "person", title: "Profile") }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("network-settings-profile")
@@ -54,28 +49,15 @@ struct NetworkSettingsView: View {
                         TextColumnDivider()
                     }
                 }
-                #if DEBUG
-                Button { model.forgetEverything() } label: {
-                    SettingsRow(symbol: "trash", title: "Forget Networks on This iPhone", trailing: nil)
-                }
-                .buttonStyle(.plain)
-                TextColumnDivider()
-                #endif
-                Text(verbatim: FeedModel.versionLine)
-                    .font(FatlineStyle.meta)
-                    .foregroundStyle(FatlineStyle.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, FatlineStyle.textColumn)
-                    .padding(.trailing, FatlineStyle.gutter)
-                    .padding(.top, FatlineStyle.gutter + FatlineStyle.itemGap)
+                // Run Checks, the Launch Log, and the build. Debug builds' Forget Networks is in there too.
+                DebugSettingsEntry { open(.debug) }
             }
         }
-        .scrollStage($stage)
         .scrollBounceBehavior(.basedOnSize)
         .safeAreaInset(edge: .bottom, spacing: 0) { bottom }
-        .scrollFade(stage)
         .foregroundStyle(FatlineStyle.ink)
         .background(FatlineStyle.paper.ignoresSafeArea())
+        .fatlineTitle("Settings")
         .task {
             if membership.isAdmin && approved { waiting = try? await model.waitingRequests() }
         }

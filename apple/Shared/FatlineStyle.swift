@@ -19,7 +19,7 @@ enum FatlineStyle {
     static let danger = Color(uiColor: .systemRed)
     #endif
 
-    /// The top of the plus, which is lit from above and ends in `action`.
+    /// The top of the Mac's plus, which is lit from above and ends in `action`.
     static let actionLit = adaptive(light: 0x164631, dark: 0xD6E7DB)
 
     enum Weight: String {
@@ -70,19 +70,16 @@ enum FatlineStyle {
             ? NSColor(white: 0, alpha: 0.4) : NSColor(srgbRed: 10 / 255, green: 47 / 255, blue: 29 / 255, alpha: 0.2)
     })
     #else
-    // Type scale: 34, 28, 24, 16, and 13 only. 28 is the title at the top of Home, Activity, and Settings.
+    // Type scale: 34, 24, 16, and 13 only. The titles at the top of Home, Activity, and Settings are
+    // the system's large titles, in the system font.
     static let bodySize: CGFloat = 16
     static let display = font(34, .semibold, relativeTo: .largeTitle)
-    static let tabTitle = font(28, .semibold, relativeTo: .title)
     static let screenTitle = font(24, .semibold, relativeTo: .title2)
     static let body = font(bodySize)
     static let bodyStrong = font(bodySize, .semibold)
     static let meta = font(13, relativeTo: .footnote)
     static let metaStrong = font(13, .semibold, relativeTo: .footnote)
     static let bodyLineSpacing: CGFloat = 2
-    static let plusGlyph = Font.system(size: 22, weight: .medium)
-    /// The glyphs in the floating bar. Like a system bar's, they don't grow with Dynamic Type.
-    static let tabGlyph = Font.system(size: 22, weight: .medium)
     /// The glyph at the start of a row in Settings, in the avatar's column.
     static let rowGlyph = Font.system(size: 20, weight: .regular)
 
@@ -100,39 +97,26 @@ enum FatlineStyle {
     static let screenGutter: CGFloat = 16
     static let screenTop: CGFloat = 12
     static let screenBottom: CGFloat = 12
-    /// The floating bar: a glass capsule of tabs and the round plus beside it, on the gutter, this far
-    /// above the bottom of the screen. The capsule insets its tabs by `barInset`, so a selected tab's
-    /// capsule is concentric with it. Screens under the bar leave `gutter` above it.
-    static let barHeight: CGFloat = 64
-    static let barBottom: CGFloat = 24
-    static let barInset: CGFloat = 4
-    /// The picture that stands for Settings in the bar.
-    static let barPicture: CGFloat = 28
-    /// A screen's title once it has scrolled away: a glass capsule on the gutter with a mark inset 8.
-    static let titleCapsuleHeight: CGFloat = 48
-    static let titleCapsuleMark: CGFloat = 32
+    /// The network's mark inside the round glass button at the leading edge of a feed's top bar:
+    /// 8 in from the system's 44-point button on each side.
+    static let toolbarMark: CGFloat = 28
+    /// The system's tab bar as measured in Photos on iOS 27: 62 tall, 21 in from the screen's sides and
+    /// bottom. Compose matches it at the bottom right, so the two share a height and a bottom edge.
+    static let tabBarHeight: CGFloat = 62 // layout-ok: the system's tab bar, which the app doesn't set
+    static let tabBarInset: CGFloat = 21 // layout-ok: the system's tab bar inset, which the app doesn't set
+    static let composeGlyph = Font.system(size: 20, weight: .medium)
     /// The badge on an Activity row's avatar, and how far it hangs past the avatar's corner.
     static let badgeSize: CGFloat = 20
     static let badgeOverhang: CGFloat = 4
     static let badgeGlyph = Font.system(size: 10, weight: .bold)
-    /// The plus is as tall as the bar beside it.
-    static let plusSize = barHeight
     /// How small a toast starts as it fades in, and how long a confirmation such as Sent stays up.
     static let toastScale: CGFloat = 0.96
     static let toastSeconds = 2.5
-    /// Rows in the Networks sheet, and the capsule behind the network showing, inset from the sheet's edges.
-    static let sheetRowHeight: CGFloat = 64
-    static let sheetRowInset: CGFloat = 8
     /// Link cards, pictures in posts, and the quoted post in Activity.
     static let cardRadius: CGFloat = 12
     // Network marks: a rounded square with the network's first letter. 12 at 40 points.
     static let markRadiusRatio: CGFloat = 0.3
     static let actionIconGap: CGFloat = 8
-    /// Behind the tab that's showing, and the network that's showing in the Networks sheet.
-    static let selection = ink.opacity(0.08)
-    static let floatShadow = Color(uiColor: UIColor {
-        $0.userInterfaceStyle == .dark ? UIColor(white: 0, alpha: 0.4) : UIColor(red: 10 / 255, green: 47 / 255, blue: 29 / 255, alpha: 0.2)
-    })
     /// A sheet's header, such as the composer's, and the bar along its bottom.
     static let sheetHeaderHeight: CGFloat = 56
     static let sheetBarHeight: CGFloat = 52
@@ -232,13 +216,17 @@ extension View {
             .toolbarBackground(FatlineStyle.paper, for: .windowToolbar)
             .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         #else
+        // Small and centered in the system font, as in Messages, in the app's green. The system's title
+        // can't take a color without changing the bar's appearance, so the bar's middle holds our own,
+        // and `navigationTitle` stays for the back button and VoiceOver.
         navigationTitle(text)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text(text)
-                        .font(FatlineStyle.bodyStrong)
+                    Text(verbatim: text)
+                        .font(.headline)
                         .foregroundStyle(FatlineStyle.ink)
+                        .lineLimit(1)
                         .accessibilityAddTraits(.isHeader)
                 }
             }

@@ -2,6 +2,10 @@ import SwiftUI
 
 @main
 struct FatlineApp: App {
+    init() {
+        LaunchLog.opened()
+    }
+
     var body: some Scene {
         WindowGroup { AppRoot() }
     }
@@ -12,6 +16,7 @@ struct FatlineApp: App {
 /// the window lives, so returning from the background never replays the splash.
 private struct AppRoot: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showSplash = true
     @State private var splashGone = false
 
@@ -27,6 +32,20 @@ private struct AppRoot: View {
             .task {
                 try? await Task.sleep(for: .seconds(0.4))
                 withAnimation(.easeOut(duration: 0.3)) { showSplash = false } completion: { splashGone = true }
+            }
+            // For Debug's Launch Log: when the app left the screen and came back.
+            .onChange(of: scenePhase) { old, phase in
+                switch phase {
+                case .background:
+                    LaunchLog.record(.info, "Went to background")
+                    LaunchLog.flush()
+                case .inactive where old == .active:
+                    LaunchLog.record(.info, "Went inactive")
+                case .active:
+                    LaunchLog.cameBack()
+                default:
+                    break
+                }
             }
     }
 }
@@ -103,12 +122,12 @@ private struct Composer: View {
     @State private var session = PostingSession()
     /// Private networks, beside Farcaster. Nothing shows them yet.
     @State private var networks = NetworkModel()
-    @State private var showNetworks = false
-    /// Add Network was tapped in the sheet, so the join steps open once it has closed.
-    @State private var addAfterSheet = false
+    /// Add Network was chosen in the network menu.
     @State private var addingNetwork = false
     @State private var showDiscardRetry = false
     @State private var builds = BuildCheck()
+    /// The composer's cover zooms out of the Farcaster feed's Compose button.
+    @Namespace private var composeZoom
     /// An alert shown during the splash would sit over it.
     let splashGone: Bool
 
@@ -119,6 +138,11 @@ private struct Composer: View {
     }
 
     private static let composerInset = FatlineStyle.gutter
+
+    private func openLink(_ url: URL) {
+        guard let target = networks.open(url) else { return }
+        addingNetwork = target == .join
+    }
 
     /// What the network reads restart on: another network, the app coming forward, or one joined or left.
     private struct NetworkPoll: Hashable {
@@ -131,7 +155,7 @@ private struct Composer: View {
         Group {
             if let membership = networks.selected {
                 // Its own identity, so switching networks starts clean.
-                NetworkHome(membership: membership) { showNetworks = true }
+                NetworkHome(membership: membership) { addingNetwork = true }
                     .id(membership.host)
             } else if session.account?.fid != nil, session.savedConnection == nil, !Connection.isSetByLaunch {
                 ConnectionSetup(finish: session.useConnection)
@@ -151,9 +175,10 @@ private struct Composer: View {
                     compose: session.openComposer,
                     signOut: session.signOut,
                     deleteCast: session.deleteCast,
-                    switchNetwork: { showNetworks = true },
+                    addNetwork: { addingNetwork = true },
+                    composeZoom: composeZoom,
                     othersHaveNews: networks.othersHaveNews,
-                    // Sits above the floating bar.
+                    // Sits above the tab bar.
                     toast: AnyView(Group { if !session.showComposer { postToastHost } })
                 )
                 .id(FeedIdentity(fid: fid, connection: session.connection))
@@ -164,20 +189,13 @@ private struct Composer: View {
             }
         }
         .tint(FatlineStyle.action)
-        .sheet(isPresented: $showNetworks, onDismiss: {
-            if addAfterSheet {
-                addAfterSheet = false
-                addingNetwork = true
-            }
-        }) {
-            NetworksSheet {
-                addAfterSheet = true
-                showNetworks = false
-            }
-            .tint(FatlineStyle.action)
-        }
         .fullScreenCover(isPresented: $addingNetwork) {
             AddNetworkFlow { addingNetwork = false }
+        }
+        // A post's link: `fatline://open` from its page, or its own address as a universal link.
+        .onOpenURL(perform: openLink)
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+            if let url = activity.webpageURL { openLink(url) }
         }
         // Reads the network showing, and looks for news in the others, now and each minute while the
         // app is in front. Coming forward starts it again, so it reads right away.
@@ -190,7 +208,9 @@ private struct Composer: View {
             }
         }
         .fullScreenCover(isPresented: Bindable(session).showComposer) {
-            composerSurface.tint(FatlineStyle.action)
+            composerSurface
+                .tint(FatlineStyle.action)
+                .navigationTransition(.zoom(sourceID: ComposeZoom.id, in: composeZoom))
         }
         .task(id: session.draft) {
             // A change to the draft cancels this wait, so a save happens once typing pauses.

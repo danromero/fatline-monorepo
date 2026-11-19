@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// Waiting for the admin, or not approved: a mark, a title, one line, and a button at the bottom.
+/// Waiting for the admin, not approved, or removed: a mark, a title, one line, and a button at the bottom.
 /// Joining shows it, and so does the network's screen while it's in that state.
 struct NetworkStatusView: View {
     let status: NetworkMembership.Status
     let host: String
+    /// Refused after being let in, which reads as being removed rather than not approved.
+    var removed = false
     let button: String
     let action: () -> Void
 
@@ -23,11 +25,12 @@ struct NetworkStatusView: View {
                         }
                     }
                     .accessibilityHidden(true)
-                Text(status == .pending ? "Request sent" : "Not approved")
+                Text(status == .pending ? "Request sent" : removed ? "Removed" : "Not approved")
                     .fatlineScreenTitle()
                     .padding(.top, FatlineStyle.gutter)
                 Text(status == .pending
                      ? "You’ll be in once the admin of \(host) approves you."
+                     : removed ? "The admin of \(host) removed you from this network."
                      : "The admin of \(host) didn’t approve this request.")
                     .font(FatlineStyle.body)
                     .foregroundStyle(FatlineStyle.secondary)

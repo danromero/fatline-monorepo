@@ -2,10 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Fatline post link</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>fatline</string>
+            </array>
+        </dict>
+    </array>
     <key>FatlineDefaultServer</key>
     <string>$(FATLINE_DEFAULT_SERVER)</string>
     <key>FatlineBuildFeed</key>
     <string>$(FATLINE_BUILD_FEED)</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Fatline saves a picture to your library when you choose Save Image.</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>UIAppFonts</key>

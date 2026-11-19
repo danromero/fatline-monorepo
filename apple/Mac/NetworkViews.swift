@@ -47,6 +47,22 @@ struct NetworkWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if model.isStale { Task { await model.refresh() } }
         }
+        // A post link opens its thread, once this network has let you in.
+        .task(id: membership.status == .approved ? model.linkedPost : nil) { await openLinkedPost() }
+    }
+
+    private func openLinkedPost() async {
+        guard membership.status == .approved, let link = model.linkedPost(in: membership.host) else { return }
+        do {
+            let post = try await model.linkedThread(link.hash)
+            state.networkPath = [.thread(post)]
+            model.linkedPostOpened(link)
+        } catch is CancellationError {
+            return
+        } catch {
+            model.linkedPostOpened(link)
+            model.toast = "That post isn’t here."
+        }
     }
 
     @ViewBuilder private var root: some View {
@@ -59,7 +75,7 @@ struct NetworkWindow: View {
             }
             .networkScreen()
         case .refused:
-            NetworkStatusView(status: .refused, host: membership.host, button: "Remove from This Mac") {
+            NetworkStatusView(status: .refused, host: membership.host, removed: membership.removed, button: "Remove from This Mac") {
                 model.forget(membership.host)
             }
             .networkScreen()
@@ -351,6 +367,8 @@ struct NetworkThreadView: View {
             root = thread.post
             replies = thread.replies
             failure = nil
+        } catch is CancellationError {
+            return
         } catch {
             failure = error.localizedDescription
         }

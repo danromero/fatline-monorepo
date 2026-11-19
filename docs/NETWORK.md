@@ -334,7 +334,8 @@ An FID with no fname is shown as `!<fid>`, as Farcaster does. Servers check user
 A post's link is `https://<host>/p/<hash>`.
 
 - **Inside the apps,** it opens the post on that network. As an embed, it shows as a quote.
-- **Anywhere else,** the server answers with a page that says Open in Fatline and links to `fatline://open?network=<host>&post=<hash>`. The page shows nothing from the post.
+- **Anywhere else,** the server answers with a page that says Open in Fatline and links to `fatline://open?network=<host>&post=<hash>`. The page tries that link once as it loads, and shows nothing from the post.
+- **Optionally,** a server serves Apple's association file at `/.well-known/apple-app-site-association`, covering `/p/*`, so an app whose Associated Domains name its domain opens these links without the page.
 
 ## What the admin can and can't do
 

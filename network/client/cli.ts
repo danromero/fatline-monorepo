@@ -1,5 +1,5 @@
 // A scripted client for Fatline networks. Run `npm run client -- help`.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname } from "node:path";
 import { parseArgs } from "node:util";
 import { english, generateMnemonic } from "viem/accounts";
@@ -129,7 +129,8 @@ async function main() {
       const fid = values.fid ? Number(values.fid) : await fidOf(custody, values.rpc ?? DEFAULT_RPC);
       if (!fid) fail(`No FID belongs to ${custody}.`);
       const identity = await approveDevice(phrase, fid, Ed25519Key.random());
-      const existing = existsSync(values.keys) ? loadKeys() : undefined;
+      // An empty file, as `mktemp` makes, is a new key file.
+      const existing = existsSync(values.keys) && statSync(values.keys).size > 0 ? loadKeys() : undefined;
       saveKeys(keyFileFor(identity, existing?.fid === fid ? existing.networks : {}));
       console.log(`Approved a device key for FID ${fid}, custody ${identity.custody}.`);
       return;

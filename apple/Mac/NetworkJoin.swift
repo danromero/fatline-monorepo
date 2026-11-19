@@ -25,7 +25,10 @@ struct AddNetworkFlow: View {
             joiner.avatar = state.model?.ownAvatarLink
             joiner.push = { path.append($0) }
             joiner.backToAddress = { path.removeAll() }
+            // Opened by a link to a post in a network this Mac isn't in.
+            if joiner.address.isEmpty, let link = state.networks.linkedPost { joiner.address = link.host }
         }
+        .onDisappear(perform: state.networks.addNetworkClosed)
     }
 
     private func finish(_ result: NetworkModel.JoinResult) {

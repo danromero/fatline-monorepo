@@ -13,6 +13,7 @@ import { hourly } from "./scheduled.ts";
 import { ensureSchema } from "./schema.ts";
 import { invite } from "./invite.ts";
 import { serveIcon } from "./icon.ts";
+import { appSiteAssociation, openPage } from "./links.ts";
 import { tooOld, updateRequired } from "./appversion.ts";
 import { insecure, secured } from "./transport.ts";
 import { addressBlock } from "./hosts.ts";
@@ -161,32 +162,6 @@ async function api(context: Context, request: Request, path: string): Promise<Re
   return response;
 }
 
-/** The page a post's link shows outside the apps. It shows nothing from the post. */
-function openPage(host: string, hash: string) {
-  const link = `fatline://open?network=${encodeURIComponent(host)}&amp;post=${hash}`;
-  const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>Fatline</title>
-<style>
-:root { color-scheme: light dark; --paper: #f6f1e6; --ink: #1f3d2b; }
-@media (prefers-color-scheme: dark) { :root { --paper: #14211a; --ink: #efe8d8; } }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--paper); color: var(--ink);
-  font: 16px/1.4 Inter, -apple-system, system-ui, sans-serif; }
-main { text-align: center; padding: 16px; }
-a { display: inline-block; margin-top: 16px; padding: 10px 20px; border-radius: 999px; background: var(--ink); color: var(--paper);
-  text-decoration: none; font-weight: 600; }
-</style></head>
-<body><main><p>This post is in a private Fatline network.</p><a href="${link}">Open in Fatline</a></main></body></html>`;
-  return new Response(html, {
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
-      "x-content-type-options": "nosniff",
-    },
-  });
-}
-
 function contextFor(env: Env, host: string, now: number, waitUntil: (work: Promise<unknown>) => void): Context {
   return { env, db: env.DB, host, now, adminFid: adminFid(env), waitUntil };
 }
@@ -256,6 +231,11 @@ const surfaces: Surface[] = [
   // Behind a secret path, shaped as invitePath allows. The page reads the network's name.
   { path: /^\/[A-Za-z0-9_-]{16,128}\/[^/]+$/, limit: "REQUESTS", database: true, handler: (c, r, m) => invite(c, r, m[0]!) },
   { path: /^\/p\/(0x[0-9a-fA-F]{40})$/, methods: ["GET"], limit: "none", database: false, handler: (c, _r, m) => openPage(c.host, m[1]!.toLowerCase()) },
+  // Apple's CDN fetches it with no cookies, and it reads nothing. A 404 without APPLE_APP_ID.
+  {
+    path: /^\/\.well-known\/apple-app-site-association$/, methods: ["GET", "HEAD"], limit: "none", database: false,
+    handler: (c) => appSiteAssociation(c.env),
+  },
 ];
 
 async function answer(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

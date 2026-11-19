@@ -83,6 +83,8 @@ npx wrangler r2 bucket list
 
 If a name is taken, ask the user whether to reuse it. If not, change `name`, `database_name`, and `bucket_name` in `wrangler.jsonc`, and use the new names everywhere below.
 
+If the account already runs a Fatline network, under any name, follow [A second network on the same account](#a-second-network-on-the-same-account) too: the six rate limits' `namespace_id` values are the same in every copy of this folder, and two Workers with the same ones share their counts.
+
 ### 4. Set the admin
 
 In `wrangler.jsonc`, put the user's FID in `vars`, as a string:
@@ -268,6 +270,7 @@ Turn them back on while debugging.
 | `MINIMUM_MAC_VERSION` | Such as `0.4.0`. Older Mac builds are told to update |
 | `MEDIA_SECRET` | Signs image links. Without it, the network makes one and keeps it in its database |
 | `FNAME_URL` | Defaults to Farcaster's fname server |
+| `APPLE_APP_ID` | Optional, and only for apps whose Associated Domains name this network's domain. Their App IDs, such as `ABCDE12345.com.example.fatline`, separated by commas. The network then serves Apple's association file, so those apps open post links themselves |
 
 ## Updating
 

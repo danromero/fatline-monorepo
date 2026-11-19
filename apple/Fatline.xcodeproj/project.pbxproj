@@ -204,6 +204,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon-Dev";
+				CODE_SIGN_ENTITLEMENTS = iPhone/Fatline.entitlements;
 				CURRENT_PROJECT_VERSION = 6;
 				GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "BLAKE3_USE_NEON=0", BLAKE3_NO_SSE2, BLAKE3_NO_SSE41, BLAKE3_NO_AVX2, BLAKE3_NO_AVX512);
 				GENERATE_INFOPLIST_FILE = YES;
@@ -226,6 +227,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = iPhone/Fatline.entitlements;
 				CURRENT_PROJECT_VERSION = 6;
 				GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "BLAKE3_USE_NEON=0", BLAKE3_NO_SSE2, BLAKE3_NO_SSE41, BLAKE3_NO_AVX2, BLAKE3_NO_AVX512);
 				GENERATE_INFOPLIST_FILE = YES;
@@ -262,7 +264,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");
-				MARKETING_VERSION = 0.3.92;
+				MARKETING_VERSION = 0.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID).dev";
 				PRODUCT_MODULE_NAME = Fatline;
 				PRODUCT_NAME = "Fatline Dev";
@@ -290,7 +292,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");
-				MARKETING_VERSION = 0.3.92;
+				MARKETING_VERSION = 0.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID)";
 				PRODUCT_MODULE_NAME = Fatline;
 				PRODUCT_NAME = Fatline;

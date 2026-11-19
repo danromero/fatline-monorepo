@@ -141,6 +141,12 @@ final class AppState {
     let menuBar = MenuBarIcon()
     /// Add Network takes over the window, as setup does.
     var addingNetwork = false
+
+    /// A post's link: its network shows the post, or Add Network opens with the address filled in.
+    func openLink(_ url: URL) {
+        guard let target = networks.open(url) else { return }
+        addingNetwork = target == .join
+    }
     var showNetworkComposer = false
     /// Replies and Activity, pushed over the network's feed.
     var networkPath: [NetworkRoute] = []
@@ -265,6 +271,11 @@ private struct AppRoot: View {
         .task { await state.networks.joinFromLaunch() }
         #endif
         .onChange(of: state.networks.selectedHost) { state.networkPath = [] }
+        // A post's link: `fatline://open` from its page, or its own address as a universal link.
+        .onOpenURL(perform: state.openLink)
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+            if let url = activity.webpageURL { state.openLink(url) }
+        }
         // News in the networks that aren't showing, for the dots on the title and in its menu.
         .task(id: state.networks.memberships.map(\.host)) {
             while !Task.isCancelled {

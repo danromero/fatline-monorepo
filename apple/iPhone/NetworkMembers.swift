@@ -15,7 +15,6 @@ struct NetworkMembersView: View {
     var body: some View {
         let members = members
         VStack(spacing: 0) {
-            FatlineDivider()
             ScrollView {
                 LazyVStack(spacing: 0) {
                     if let error {
