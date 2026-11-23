@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Replies to your posts, mentions of you, and likes on your posts, the second tab, under a small
-/// centered Activity. The rows are the same as the Mac's, which doesn't show likes yet. Likes don't
-/// add to the tab's count.
+/// centered Activity. The rows are X's, with your post's picture at the trailing edge; the Mac keeps
+/// its own and doesn't show likes yet. Likes don't add to the tab's count.
 struct NetworkActivityView: View {
     let membership: NetworkMembership
     /// True while this tab is the one showing. Reading Activity marks it seen, so it only reads then.

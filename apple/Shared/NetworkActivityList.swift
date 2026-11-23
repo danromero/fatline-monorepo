@@ -79,11 +79,96 @@ enum NetworkLikeRow {
         if post.embeds.contains(where: { $0.type == "post" }) { return "Quoted post" }
         return post.parent == nil ? "Post" : "Reply"
     }
+
+    /// The liked post's line on iPhone, where its first picture shows at the row's trailing edge: none
+    /// for a post that's only pictures, since the picture says it.
+    static func caption(of post: NetworkPost, pictureShown: Bool) -> String? {
+        let onlyPictures = post.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !post.embeds.contains { $0.type == "link" } && post.embeds.contains { $0.type == "image" }
+        return pictureShown && onlyPictures ? nil : summary(of: post)
+    }
 }
 
+#if os(iOS)
+/// An Activity row on iPhone, as on X: what happened as a glyph in the avatar's column, the people's
+/// pictures over one sentence that ends in when, a line of the post, and your post's first picture at
+/// the trailing edge.
+struct NetworkActivityRow: View {
+    struct Person: Hashable {
+        let url: URL?
+        let handle: String
+    }
+
+    let glyph: String
+    let people: [Person]
+    /// Names bold, the words around them regular.
+    let sentence: Text
+    let date: Date
+    /// For a like, your post, in gray on up to two lines. For a reply or mention, their words.
+    let line: String?
+    var lineIsTheirs = false
+    let picture: FeedCast.Picture?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: FatlineStyle.gutter) {
+            HStack(alignment: .top, spacing: FatlineStyle.avatarGap) {
+                Image(systemName: glyph)
+                    .font(FatlineStyle.rowGlyph)
+                    .foregroundStyle(FatlineStyle.action)
+                    .frame(width: FatlineStyle.avatarSize, height: FatlineStyle.activityAvatarSize)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: FatlineStyle.itemGap) {
+                    faces
+                    VStack(alignment: .leading, spacing: FatlineStyle.castGap) {
+                        TimelineView(.everyMinute) { context in
+                            // No-break spaces keep the time with the sentence's last word.
+                            let age = Text(verbatim: "\u{00A0}·\u{00A0}" + FeedCast.shortAge(of: date, at: context.date))
+                                .font(FatlineStyle.body)
+                                .foregroundStyle(FatlineStyle.secondary)
+                            Text("\(sentence)\(age)")
+                                .lineSpacing(FatlineStyle.bodyLineSpacing)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let line {
+                            Text(verbatim: line)
+                                .font(FatlineStyle.body)
+                                .lineSpacing(FatlineStyle.bodyLineSpacing)
+                                .foregroundStyle(lineIsTheirs ? FatlineStyle.ink : FatlineStyle.secondary)
+                                .lineLimit(lineIsTheirs ? nil : 2)
+                                .truncationMode(.tail)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let picture {
+                CastPicture(url: picture.url, ratio: picture.ratio, layout: .activity)
+            }
+        }
+        .padding(.horizontal, FatlineStyle.gutter)
+        .padding(.vertical, FatlineStyle.rowPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(FatlineStyle.paper)
+    }
+
+    /// Their pictures in a row, each over the next, with a paper ring between them.
+    private var faces: some View {
+        HStack(spacing: -FatlineStyle.activityAvatarOverlap) {
+            ForEach(Array(people.enumerated()), id: \.offset) { index, person in
+                CastAvatar(url: person.url, handle: person.handle, size: FatlineStyle.activityAvatarSize)
+                    .background { Circle().fill(FatlineStyle.paper).padding(-FatlineStyle.unreadRing) }
+                    .zIndex(Double(people.count - index))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+#endif
+
 /// Activity's rows, in both apps: what arrived since the last look under New, and the rest under
-/// Earlier. Each row opens the replies it's part of, a reply shows the post it answers in a quiet
-/// card, a like on iPhone shows your post on one line, and an admin sees requests to join first. It
+/// Earlier. Each row opens the replies it's part of, and an admin sees requests to join first. iPhone's
+/// rows are X's (`NetworkActivityRow`); on a Mac a reply shows the post it answers in a quiet card. It
 /// goes inside the screen's own scrolling stack.
 struct NetworkActivityList: View {
     let activity: NetworkActivityState
@@ -141,6 +226,51 @@ struct NetworkActivityList: View {
     }
 
     @ViewBuilder private func row(_ item: NetworkActivity.Item) -> some View {
+        #if os(iOS)
+        phoneRow(item)
+        #else
+        macRow(item)
+        #endif
+    }
+
+    #if os(iOS)
+    /// X's row: a like names its likers over your post, and a reply or mention shows their words. Your
+    /// post's first picture sits at the trailing edge: the liked post, the post a reply answers, or for a
+    /// mention, theirs.
+    @ViewBuilder private func phoneRow(_ item: NetworkActivity.Item) -> some View {
+        let date = Date(timeIntervalSince1970: TimeInterval(item.when))
+        if item.isLike, let likers = item.likers, !likers.isEmpty {
+            let names = likers.map { model.handle(for: $0.fid, named: $0.username) }
+            let header = NetworkLikeRow.header(names: names, count: item.count ?? names.count,
+                                               reply: item.parent != nil || item.post.parent != nil)
+            let picture = model.firstPicture(of: item.post)
+            NetworkActivityRow(glyph: "heart.fill",
+                               people: zip(likers, names).map { NetworkActivityRow.Person(url: avatar(for: $0.fid), handle: $1) },
+                               sentence: title(header), date: date,
+                               line: NetworkLikeRow.caption(of: item.post, pictureShown: picture != nil),
+                               picture: picture)
+        } else {
+            let reply = item.kind == "reply"
+            let handle = model.handle(for: item.post.fid)
+            let text = item.post.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let shown = reply ? item.parent.flatMap { $0.deleted ? nil : $0 } : item.post
+            NetworkActivityRow(glyph: reply ? "arrowshape.turn.up.left.fill" : "at",
+                               people: [.init(url: avatar(for: item.post.fid), handle: handle)],
+                               sentence: Text("\(Text(verbatim: handle).font(FatlineStyle.bodyStrong))\(Text(reply ? " replied" : " mentioned you").font(FatlineStyle.body))"),
+                               date: date,
+                               line: text.isEmpty ? NetworkLikeRow.summary(of: item.post) : text, lineIsTheirs: true,
+                               picture: shown.flatMap { model.firstPicture(of: $0) })
+        }
+    }
+
+    /// A member's picture, from the network's own host.
+    private func avatar(for fid: UInt64) -> URL? {
+        guard let link = model.members.first(where: { $0.fid == fid })?.avatar, let host = model.selectedHost else { return nil }
+        return FeedCast.networkMediaURL(link, host: host)
+    }
+    #endif
+
+    @ViewBuilder private func macRow(_ item: NetworkActivity.Item) -> some View {
         if item.isLike, let newest = item.likers?.first {
             // The newest liker's picture, at the newest like's time, over your post's text on one line.
             let names = (item.likers ?? []).map { model.handle(for: $0.fid, named: $0.username) }

@@ -583,11 +583,24 @@ final class NetworkModel {
         let quote = post.embeds.first { $0.type == "post" }?.post.map {
             FeedCast.Quote(fid: $0.fid, handle: handle(for: $0.fid), text: $0.text)
         }
-        let images = post.embeds.compactMap { $0.type == "image" ? $0.src : nil }
+        let pictures = post.embeds.filter { $0.type == "image" && $0.src != nil }
+        let images = pictures.compactMap(\.src)
         return FeedCast(hash: post.hash, fid: post.fid, time: post.time, text: post.text,
                         links: links.isEmpty ? nil : links, quote: quote,
                         avatar: members.first { $0.fid == post.fid }?.avatar,
-                        images: images.isEmpty ? nil : images, mediaHost: selectedHost)
+                        images: images.isEmpty ? nil : images, mediaHost: selectedHost,
+                        imageRatios: images.isEmpty ? nil : pictures.map { Self.ratio(of: $0) })
+    }
+
+    /// A post's first picture, for its Activity row.
+    func firstPicture(of post: NetworkPost) -> FeedCast.Picture? {
+        cast(for: post).pictures.first
+    }
+
+    /// An image's width over its height, or zero when the network didn't say.
+    private static func ratio(of embed: NetworkPost.Embed) -> Double {
+        guard let width = embed.width, let height = embed.height, width > 0, height > 0 else { return 0 }
+        return Double(width) / Double(height)
     }
 
     /// A link the network has read, for a card under the post.

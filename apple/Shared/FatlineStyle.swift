@@ -130,6 +130,19 @@ enum FatlineStyle {
     static let listRowHeight: CGFloat = 56
     /// The picture on Your profile.
     static let profilePictureSize: CGFloat = 64
+    /// Two or more pictures in a post: one row this tall, which swipes sideways from the text column
+    /// off the screen's edge, as on X.
+    static let pictureRowHeight: CGFloat = 256
+    /// A picture in that row keeps its shape between these, width over height. Past them it's cropped.
+    static let pictureRowTallest: CGFloat = 3 / 4
+    static let pictureRowWidest: CGFloat = 1
+    /// One picture fills the column, cropped when it's taller than this, width over height.
+    static let singlePictureTallest: CGFloat = 4 / 5
+    /// Activity, as on X: the people's pictures, overlapping a little, and your post's picture at the
+    /// trailing edge.
+    static let activityAvatarSize: CGFloat = 32
+    static let activityAvatarOverlap: CGFloat = 4
+    static let activityPictureSize: CGFloat = 64
     #endif
 
     // Grid: content runs from the gutter to the mirrored right gutter. Text in lists starts at textColumn.

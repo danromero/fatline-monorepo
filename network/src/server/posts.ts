@@ -48,8 +48,13 @@ async function selectPosts(context: Context, viewer: Viewer, rest: string, param
   return rows.results;
 }
 
-/** Turns rows into Posts, with quoted posts filled in. */
-async function postsJSON(context: Context, viewer: Viewer, rows: PostRow[], options: { nested?: boolean } = {}) {
+/**
+ * Turns rows into Posts, with quoted posts filled in. A nested post, such as a quoted one, comes without
+ * embeds, or with only its pictures when `pictures` is set, as for the post a reply answers in activity.
+ */
+async function postsJSON(context: Context, viewer: Viewer, rows: PostRow[], options: { nested?: boolean; pictures?: boolean } = {}) {
+  const kept = (embeds: StoredEmbed[]) =>
+    options.nested ? (options.pictures ? embeds.filter((embed) => embed.kind === "image") : []) : embeds;
   const names = await usernames(context);
   const quoted = new Map<string, unknown>();
   if (!options.nested) {
@@ -61,7 +66,7 @@ async function postsJSON(context: Context, viewer: Viewer, rows: PostRow[], opti
     }
   }
 
-  const stored = options.nested ? [] : rows.flatMap((row) => (row.deleted === null ? (JSON.parse(row.embeds) as StoredEmbed[]) : []));
+  const stored = rows.flatMap((row) => (row.deleted === null ? kept(JSON.parse(row.embeds) as StoredEmbed[]) : []));
   const { images, previews, own } = await mediaFor(
     context,
     stored.flatMap((embed) => (embed.kind === "image" ? [embed.id] : [])),
@@ -74,7 +79,7 @@ async function postsJSON(context: Context, viewer: Viewer, rows: PostRow[], opti
     const base = { hash: row.hash, fid: row.fid, time: row.time, parent: row.parent, parentFid: row.parent_fid, replies: row.replies };
     if (row.deleted !== null) return { ...base, text: "", mentions: [], embeds: [], likes: 0, liked: false, deleted: true };
     const mentions = JSON.parse(row.mentions) as { fid: number; position: number }[];
-    const embeds = options.nested ? [] : (JSON.parse(row.embeds) as StoredEmbed[]).flatMap((embed): Record<string, unknown>[] => {
+    const embeds = kept(JSON.parse(row.embeds) as StoredEmbed[]).flatMap((embed): Record<string, unknown>[] => {
       if (embed.kind === "post") return [{ type: "post", hash: embed.hash, post: quoted.get(embed.hash) ?? null }];
       if (embed.kind === "image") {
         const image = images.get(embed.id);
@@ -256,12 +261,13 @@ export async function activity(context: Context, viewer: Viewer, request: Reques
       : [];
     const posts = await postsJSON(context, viewer, rows);
     const byHash = new Map(rows.map((row, index) => [row.hash, posts[index]]));
-    // A reply comes with the post it answers, without that post's own embeds, so an app can quote it.
+    // A reply comes with the post it answers, so an app can quote it: its pictures, for a thumbnail,
+    // and none of its other embeds.
     const parentHashes = [...new Set(rows.flatMap((row) => (row.parent ? [row.parent] : [])))];
     const parentRows = parentHashes.length
       ? await selectPosts(context, viewer, `WHERE ${HASH_IN_LIST}`, [JSON.stringify(parentHashes)])
       : [];
-    const parentPosts = await postsJSON(context, viewer, parentRows, { nested: true });
+    const parentPosts = await postsJSON(context, viewer, parentRows, { nested: true, pictures: true });
     const parents = new Map(parentRows.map((row, index) => [row.hash, parentPosts[index]]));
     const parentOf = new Map(rows.map((row) => [row.hash, row.parent ? (parents.get(row.parent) ?? null) : null]));
     // Who liked each liked post on the page, newest first, sorted here rather than by D1, which counts

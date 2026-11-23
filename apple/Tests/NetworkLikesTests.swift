@@ -105,4 +105,27 @@ final class NetworkLikesTests: XCTestCase {
         XCTAssertEqual(NetworkLikeRow.summary(of: try decoded(post("0x5", text: ""))), "Post")
         XCTAssertEqual(NetworkLikeRow.summary(of: try decoded(post("0x6", text: "", parent: "0xa"))), "Reply")
     }
+
+    func testAPostOfOnlyPicturesHasNoLineWhereItsPictureShows() throws {
+        let picture = #"{"type":"image","width":4,"height":3,"src":"https://pine.example/media/a"}"#
+        let link = #"{"type":"link","url":"https://www.example.com/rakes"}"#
+        XCTAssertNil(NetworkLikeRow.caption(of: try decoded(post("0x1", text: " ", embeds: [picture, picture])), pictureShown: true))
+        XCTAssertEqual(NetworkLikeRow.caption(of: try decoded(post("0x2", text: "", embeds: [picture])), pictureShown: false), "Picture",
+                       "a picture that can't show is still named")
+        XCTAssertEqual(NetworkLikeRow.caption(of: try decoded(post("0x3", embeds: [picture])), pictureShown: true),
+                       "Garden cleanup Sunday at 9.")
+        XCTAssertEqual(NetworkLikeRow.caption(of: try decoded(post("0x4", text: "", embeds: [picture, link])), pictureShown: true),
+                       "example.com/rakes")
+    }
+
+    func testAPostsPicturesKeepTheirShapes() {
+        let links = ["a", "b", "c", "d"].map { "https://pine.example/media/\($0)" }
+        var cast = FeedCast(hash: "0x1", fid: 3, time: 100, text: "", images: links, mediaHost: "pine.example",
+                            imageRatios: [16.0 / 9.0, 0, 0.75, 0.75])
+        cast.images?[2] = "http://192.168.1.2/media/c"
+        XCTAssertEqual(cast.pictures.map(\.url.lastPathComponent), ["a", "b", "d"], "a picture that can't be fetched safely is left out")
+        XCTAssertEqual(cast.pictures.map(\.ratio), [16.0 / 9.0, nil, 0.75], "each keeps its own shape after one is left out")
+        cast.imageRatios = nil
+        XCTAssertEqual(cast.pictures.map(\.ratio), [nil, nil, nil], "a Farcaster cast doesn't say")
+    }
 }

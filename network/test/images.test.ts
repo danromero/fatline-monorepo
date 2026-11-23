@@ -109,6 +109,18 @@ describe("images", () => {
     assert.equal((await load(preview.image!)).status, 200);
   });
 
+  test("a reply in activity comes with the pictures of the post it answers, and none of its other embeds", async () => {
+    const image = await as(bob).uploadImage(TEST_PNG, "image/png");
+    const hash = await as(bob).post({ text: "Garden", embeds: [{ url: image.url }, { url: "https://menu.example/test/page.html" }] });
+    const reply = await as(carol).reply({ fid: bob.fid, hash }, { text: "Lovely" });
+    const item = (await as(bob).activity()).items.find((found) => found.post.hash === reply)!;
+    const embeds = item.parent!.embeds;
+    assert.deepEqual(embeds.map((embed) => embed.type), ["image"]);
+    const picture = embeds[0]!;
+    assert.ok(picture.type === "image");
+    assert.equal((await load(picture.src)).status, 200);
+  });
+
   test("a joining member's Farcaster picture is copied in, and anyone can upload their own", async () => {
     const code = await as(alice).createInvite({ code: "PICTURES" });
     fixture.network.farcaster.add(gina);

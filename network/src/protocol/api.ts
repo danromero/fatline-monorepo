@@ -118,7 +118,7 @@ export interface Thread {
 export interface PostActivity {
   kind: "reply" | "mention";
   post: Post;
-  /** For a reply, the post it answers, without its embeds. */
+  /** For a reply, the post it answers, with its pictures and none of its other embeds. */
   parent: Post | null;
 }
 
@@ -130,7 +130,7 @@ export interface LikeActivity {
   kind: "like";
   /** The post that was liked, one of yours. */
   post: Post;
-  /** For a reply, the post it answers, without its embeds. */
+  /** For a reply, the post it answers, with its pictures and none of its other embeds. */
   parent: Post | null;
   /** The newest likers, newest first, up to 3. */
   likers: { fid: number; username: string }[];

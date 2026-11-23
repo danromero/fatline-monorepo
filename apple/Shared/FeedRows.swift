@@ -165,51 +165,122 @@ struct CastAvatar: View {
 
 /// A picture attached to a cast. Tapping it on iPhone opens the cast's pictures full screen.
 /// Clicking it on a Mac opens the full image in the browser.
-private struct CastPicture: View {
+struct CastPicture: View {
+    /// How a picture takes its place.
+    enum Layout {
+        /// The Mac's: the column's width at its own shape, up to 4:5, shown whole inside that.
+        case whole
+        /// iPhone, one picture in a post: the column's width at its own shape, cropped at 4:5.
+        case column
+        /// iPhone, one of several in a row that swipes: the row's height, 3:4 to 1:1, cropped past that.
+        case row
+        /// iPhone, your post's picture on an Activity row: a small square, and not a button, since the
+        /// row opens the replies.
+        case activity
+    }
+
     let url: URL
+    /// Width over height, when the post said, so the picture takes its shape before it loads.
+    var ratio: CGFloat? = nil
+    var layout = Layout.whole
     /// Opens the picture viewer, on iPhone.
     var open: () -> Void = {}
     @State private var loaded: CGImage?
     @State private var failed = false
 
-    private static let maxPixels = CastImages.feedPicturePixels
     private static let placeholderRatio: CGFloat = 4 / 3
-    /// The tallest a picture's box gets. A taller picture is shown whole inside it.
+    /// The tallest a picture's box gets on a Mac. A taller picture is shown whole inside it.
     private static let tallestRatio: CGFloat = 4 / 5
 
+    private var maxPixels: Int {
+        layout == .activity ? CastImages.activityPicturePixels : CastImages.feedPicturePixels
+    }
+
     var body: some View {
-        let image = loaded ?? CastImages.cached(url, maxPixels: Self.maxPixels)
-        opener {
+        let image = loaded ?? CastImages.cached(url, maxPixels: maxPixels)
+        Group {
+            if layout == .activity {
+                box(image)
+            } else {
+                opener { box(image) }
+                    .buttonStyle(.plain)
+                    #if os(macOS)
+                    .pointerStyle(.link)
+                    #endif
+                    .accessibilityLabel("Open image")
+            }
+        }
+        // One that failed tries again after the next feed read.
+        .task(id: PictureTry(url: url, round: failed ? CastImages.retryRound : 0)) {
+            guard image == nil else { return }
+            loaded = await CastImages.load(url, maxPixels: maxPixels)
+            failed = loaded == nil
+        }
+    }
+
+    @ViewBuilder private func box(_ image: CGImage?) -> some View {
+        let shape = image.map { CGFloat($0.width) / CGFloat(max($0.height, 1)) } ?? ratio
+        switch layout {
+        case .whole, .column:
             if failed && image == nil {
                 Text("Image unavailable")
                     .font(FatlineStyle.meta)
                     .foregroundStyle(FatlineStyle.secondary)
                     .underline()
-            } else {
+            } else if layout == .whole {
                 FatlineStyle.quiet
-                    .aspectRatio(image.map(Self.ratio) ?? Self.placeholderRatio, contentMode: .fit)
-                    .overlay {
-                        if let image {
-                            Image(decorative: image, scale: 1)
-                                .resizable()
-                                .interpolation(.high)
-                                .scaledToFit()
-                        }
-                    }
+                    .aspectRatio(max(shape ?? Self.placeholderRatio, Self.tallestRatio), contentMode: .fit)
+                    .overlay { picture(image, fill: false) }
                     .clipShape(.rect(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
                     .contentShape(.rect)
+            } else {
+                #if os(iOS)
+                FatlineStyle.quiet
+                    .aspectRatio(max(shape ?? Self.placeholderRatio, FatlineStyle.singlePictureTallest), contentMode: .fit)
+                    .overlay { picture(image, fill: true) }
+                    .clipShape(.rect(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
+                    .contentShape(.rect)
+                #endif
             }
+        case .row:
+            #if os(iOS)
+            let height = FatlineStyle.pictureRowHeight
+            let kept = min(max(shape ?? FatlineStyle.pictureRowTallest, FatlineStyle.pictureRowTallest), FatlineStyle.pictureRowWidest)
+            FatlineStyle.quiet
+                .frame(width: (height * kept).rounded(), height: height)
+                .overlay {
+                    if failed && image == nil {
+                        Text("Image unavailable")
+                            .font(FatlineStyle.meta)
+                            .foregroundStyle(FatlineStyle.secondary)
+                    } else {
+                        picture(image, fill: true)
+                    }
+                }
+                .clipShape(.rect(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
+                .contentShape(.rect)
+            #else
+            EmptyView()
+            #endif
+        case .activity:
+            #if os(iOS)
+            FatlineStyle.quiet
+                .frame(width: FatlineStyle.activityPictureSize, height: FatlineStyle.activityPictureSize)
+                .overlay { picture(image, fill: true) }
+                .clipShape(.rect(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
+                .accessibilityHidden(true)
+            #else
+            EmptyView()
+            #endif
         }
-        .buttonStyle(.plain)
-        #if os(macOS)
-        .pointerStyle(.link)
-        #endif
-        .accessibilityLabel("Open image")
-        // One that failed tries again after the next feed read.
-        .task(id: PictureTry(url: url, round: failed ? CastImages.retryRound : 0)) {
-            guard image == nil else { return }
-            loaded = await CastImages.load(url, maxPixels: Self.maxPixels)
-            failed = loaded == nil
+    }
+
+    @ViewBuilder private func picture(_ image: CGImage?, fill: Bool) -> some View {
+        if let image {
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: fill ? .fill : .fit)
         }
     }
 
@@ -220,11 +291,47 @@ private struct CastPicture: View {
         Link(destination: url, label: label)
         #endif
     }
+}
 
-    private static func ratio(_ image: CGImage) -> CGFloat {
-        max(CGFloat(image.width) / CGFloat(max(image.height, 1)), tallestRatio)
+#if os(iOS)
+/// Two or more pictures in one row that swipes sideways, as on X: from the text column off the
+/// screen's edge, under the avatar's column once swiped. Each picture stops on the text column, and
+/// the last one at the gutter.
+private struct CastPictureRow: View {
+    let pictures: [FeedCast.Picture]
+    /// The picture showing in the viewer. The row follows it, so closing the viewer zooms back into a
+    /// picture that's on screen.
+    let shown: Int
+    let zoom: Namespace.ID
+    let open: (Int) -> Void
+    @State private var position = ScrollPosition(idType: Int.self)
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: FatlineStyle.itemGap) {
+                ForEach(pictures.indices, id: \.self) { index in
+                    CastPicture(url: pictures[index].url, ratio: pictures[index].ratio, layout: .row) { open(index) }
+                        .matchedTransitionSource(id: index, in: zoom) {
+                            $0.clipShape(RoundedRectangle(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
+                        }
+                        .accessibilityLabel("Open image \(index + 1) of \(pictures.count)")
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollIndicators(.hidden)
+        .scrollTargetBehavior(.viewAligned)
+        .scrollPosition($position)
+        .contentMargins(.leading, FatlineStyle.textColumn, for: .scrollContent)
+        .contentMargins(.trailing, FatlineStyle.gutter, for: .scrollContent)
+        .frame(height: FatlineStyle.pictureRowHeight)
+        // Past the column the row sits in, to both edges of the screen.
+        .padding(.leading, -FatlineStyle.textColumn)
+        .padding(.trailing, -FatlineStyle.gutter)
+        .onChange(of: shown) { _, index in position.scrollTo(id: index) }
     }
 }
+#endif
 
 struct CastRow: View {
     let cast: FeedCast
@@ -262,7 +369,8 @@ struct CastRow: View {
 
     var body: some View {
         let links = cast.webLinks
-        let images = cast.imageURLs
+        let pictures = cast.pictures
+        let images = pictures.map(\.url)
         HStack(alignment: .top, spacing: FatlineStyle.avatarGap) {
             CastAvatar(url: cast.avatarURL, handle: handle, background: highlighted ? FatlineStyle.paper : FatlineStyle.quiet)
                 .overlay(alignment: .bottomTrailing) {
@@ -291,18 +399,24 @@ struct CastRow: View {
                 if !cast.text.isEmpty {
                     CastBodyText(text: cast.text)
                 }
-                ForEach(images.indices, id: \.self) { index in
-                    CastPicture(url: images[index]) { openPicture(index) }
-                        #if os(iOS)
-                        .matchedTransitionSource(id: index, in: pictureZoom) {
+                #if os(iOS)
+                // 8 under the text, and the row's own padding under the pictures.
+                if pictures.count == 1, let only = pictures.first {
+                    CastPicture(url: only.url, ratio: only.ratio, layout: .column) { openPicture(0) }
+                        .matchedTransitionSource(id: 0, in: pictureZoom) {
                             $0.clipShape(RoundedRectangle(cornerRadius: FatlineStyle.cardRadius, style: .continuous))
                         }
-                        // 8 under the text, and the row's own padding under the picture.
                         .padding(.top, FatlineStyle.castGap)
-                        #else
-                        .padding(.vertical, 4)
-                        #endif
+                } else if pictures.count > 1 {
+                    CastPictureRow(pictures: pictures, shown: picture, zoom: pictureZoom, open: openPicture)
+                        .padding(.top, FatlineStyle.castGap)
                 }
+                #else
+                ForEach(pictures.indices, id: \.self) { index in
+                    CastPicture(url: pictures[index].url, ratio: pictures[index].ratio)
+                        .padding(.vertical, FatlineStyle.castGap)
+                }
+                #endif
                 ForEach(links, id: \.self) { url in
                     Link(destination: url) {
                         // Two lines always fit a host this short, and a longer one gets as many as it needs.

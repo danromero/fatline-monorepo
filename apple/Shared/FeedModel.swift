@@ -36,12 +36,30 @@ struct FeedCast: Codable, Hashable, Identifiable, Sendable {
     var images: [String]? = nil
     /// For a post in a Fatline network: the network's host, which serves its pictures itself.
     var mediaHost: String? = nil
+    /// Each picture's width over its height, in the order of `images`, when the post said: a network
+    /// does, Farcaster doesn't. Zero for one it didn't. It lets a row take its shape before the picture loads.
+    var imageRatios: [Double]? = nil
+
+    /// A picture to show, and its shape when known.
+    struct Picture: Hashable {
+        let url: URL
+        let ratio: CGFloat?
+    }
 
     var id: String { hash }
     var date: Date { Date(timeIntervalSince1970: TimeInterval(time)) }
 
     var avatarURL: URL? { avatar.flatMap(picture) }
-    var imageURLs: [URL] { (images ?? []).compactMap(picture) }
+    var imageURLs: [URL] { pictures.map(\.url) }
+
+    var pictures: [Picture] {
+        let ratios = imageRatios ?? []
+        return (images ?? []).enumerated().compactMap { index, link in
+            guard let url = picture(link) else { return nil }
+            let ratio = index < ratios.count && ratios[index].isFinite && ratios[index] > 0 ? CGFloat(ratios[index]) : nil
+            return Picture(url: url, ratio: ratio)
+        }
+    }
 
     private func picture(_ link: String) -> URL? {
         if let mediaHost, let url = Self.networkMediaURL(link, host: mediaHost) { return url }
@@ -100,6 +118,11 @@ extension FeedCast {
 
     /// The feed's short timestamp, such as Now, 5m, 3h, or 2d.
     func shortAge(at now: Date) -> String {
+        Self.shortAge(of: date, at: now)
+    }
+
+    /// The same for any date, such as when a post was last liked.
+    static func shortAge(of date: Date, at now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
         if seconds < 60 { return "Now" }
         if seconds < 3600 { return "\(seconds / 60)m" }

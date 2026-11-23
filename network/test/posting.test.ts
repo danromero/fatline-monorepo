@@ -35,7 +35,7 @@ describe("posting", () => {
     assert.ok(!findPost((await as(alice).feed()).posts, reply), "replies stay out of the feed");
     const bobs = await as(bob).activity();
     assert.deepEqual(bobs.items.map((item) => [item.kind, item.post.hash, item.parent?.hash]), [["reply", reply, dinner]]);
-    assert.equal(bobs.items[0]!.parent!.embeds.length, 0, "the answered post comes without its embeds");
+    assert.equal(bobs.items[0]!.parent!.embeds.length, 0, "the answered post comes without its link or quote embeds");
     const carols = await as(carol).activity();
     assert.deepEqual(carols.items.map((item) => [item.kind, item.post.hash, item.parent]), [["mention", dinner, null]]);
   });

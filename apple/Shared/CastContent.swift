@@ -50,6 +50,8 @@ enum CastImages {
     /// zooms in. The viewer shows the feed's copy until its own loads.
     static let feedPicturePixels = 1400
     static let viewerPicturePixels = 3072
+    /// Your post's picture on an Activity row, 64 points square: enough for its short side at 3x.
+    static let activityPicturePixels = 384
 
     nonisolated private static let maxDownloadBytes = 25_000_000
     nonisolated private static let maxSourcePixels = 100_000_000
