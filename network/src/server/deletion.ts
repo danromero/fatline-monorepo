@@ -25,22 +25,23 @@ export function deletionStatements(context: Context, where: string, params: unkn
 }
 
 /**
- * Ends every device of someone's: their device keys and network keys stop working, and their sessions
- * and admin page sign-ins end. Nothing they posted goes. To come back, they enter their recovery
- * phrase, which approves a new device key.
+ * Ends every device of someone's: their device keys and network keys stop working, and their sessions,
+ * admin page sign-ins, and notifications end. Nothing they posted goes. To come back, they enter their
+ * recovery phrase, which approves a new device key.
  */
 export function signOutStatements(context: Context, fid: number): D1PreparedStatement[] {
   const db = context.db;
   return [
     db.prepare("UPDATE device_keys SET revoked = ? WHERE fid = ? AND revoked IS NULL").bind(context.now, fid),
     db.prepare("UPDATE network_keys SET revoked = ? WHERE fid = ? AND revoked IS NULL").bind(context.now, fid),
+    db.prepare("DELETE FROM push_targets WHERE fid = ?").bind(fid),
     db.prepare("DELETE FROM sessions WHERE fid = ?").bind(fid),
     db.prepare("DELETE FROM admin_links WHERE fid = ?").bind(fid),
     db.prepare("DELETE FROM admin_sessions WHERE fid = ?").bind(fid),
   ];
 }
 
-/** Takes someone out of the network: everything they posted or liked, their keys, and their sessions. */
+/** Takes someone out of the network: everything they posted or liked, their keys, their sessions, and their notifications. */
 export function removalStatements(context: Context, fid: number, options: { block: boolean; by: number | null; username: string | null }) {
   const db = context.db;
   const statements = [
@@ -49,6 +50,7 @@ export function removalStatements(context: Context, fid: number, options: { bloc
     db.prepare("DELETE FROM mutes WHERE fid = ? OR muted = ?").bind(fid, fid),
     db.prepare("DELETE FROM reports WHERE fid = ?").bind(fid),
     db.prepare("UPDATE network_keys SET revoked = ? WHERE fid = ? AND revoked IS NULL").bind(context.now, fid),
+    db.prepare("DELETE FROM push_targets WHERE fid = ?").bind(fid),
     db.prepare("DELETE FROM sessions WHERE fid = ?").bind(fid),
     db.prepare("DELETE FROM members WHERE fid = ?").bind(fid),
     db.prepare("DELETE FROM join_requests WHERE fid = ?").bind(fid),

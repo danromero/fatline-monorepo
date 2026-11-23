@@ -9,6 +9,7 @@ import { submit } from "./messages.ts";
 import { MEDIA_ID, serve, setPreviews, upload } from "./media.ts";
 import type { Size } from "./media.ts";
 import { activity, feed, thread } from "./posts.ts";
+import { removePush, setPush, setSeen, testPush } from "./push.ts";
 import { hourly } from "./scheduled.ts";
 import { ensureSchema } from "./schema.ts";
 import { invite } from "./invite.ts";
@@ -62,7 +63,7 @@ const routes: Route[] = [
   { method: "GET", path: /^\/invites\/([^/]{1,200})$/, who: "anyone", limit: "JOINS", handler: (c, _r, m) => members.invite(c, m[1]!) },
   { method: "POST", path: /^\/join$/, who: "anyone", limit: "JOINS", handler: (c, r) => join(c, r) },
   { method: "POST", path: /^\/session$/, who: "anyone", limit: "JOINS", handler: (c, r) => session(c, r) },
-  { method: "DELETE", path: /^\/session$/, who: "member", daily: "free", handler: (c, r) => endSession(c, r) },
+  { method: "DELETE", path: /^\/session$/, who: "member", daily: "free", handler: (c, r, _m, v) => endSession(c, r, v) },
 
   { method: "GET", path: /^\/network$/, who: "member", handler: (c, _r, _m, v) => members.network(c, v) },
   { method: "GET", path: /^\/feed$/, who: "member", handler: (c, r, _m, v) => feed(c, v, r) },
@@ -73,6 +74,11 @@ const routes: Route[] = [
   { method: "GET", path: /^\/activity$/, who: "member", handler: (c, r, _m, v) => activity(c, v, r) },
   { method: "GET", path: /^\/members$/, who: "member", handler: (c, _r, _m, v) => members.members(c, v) },
   { method: "PATCH", path: /^\/me$/, who: "member", handler: (c, r, _m, v) => members.updateProfile(c, v, r) },
+  { method: "PUT", path: /^\/me\/push$/, who: "member", handler: (c, r, _m, v) => setPush(c, v, r) },
+  { method: "PUT", path: /^\/me\/seen$/, who: "member", handler: (c, r, _m, v) => setSeen(c, v, r) },
+  { method: "POST", path: /^\/me\/push\/test$/, who: "member", limit: "MESSAGES", handler: (c, _r, _m, v) => testPush(c, v) },
+  // Free, like signing out, so a device can always stop hearing from the network.
+  { method: "DELETE", path: /^\/me\/push$/, who: "member", daily: "free", handler: (c, _r, _m, v) => removePush(c, v) },
   { method: "PUT", path: new RegExp(`^/mutes/${FID}$`), who: "member", handler: (c, _r, m, v) => members.mute(c, v, m[1]!) },
   { method: "DELETE", path: new RegExp(`^/mutes/${FID}$`), who: "member", handler: (c, _r, m, v) => members.unmute(c, v, m[1]!) },
   { method: "POST", path: /^\/reports$/, who: "member", handler: (c, r, _m, v) => members.report(c, v, r) },

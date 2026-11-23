@@ -239,6 +239,10 @@ struct CastRow: View {
     var badge: String? = nil
     /// Whose post a reply in the feed answers, for the line under the name.
     var replyingTo: String? = nil
+    /// In place of the name and what they did, as a like's several names in Activity.
+    var title: Text? = nil
+    /// One quiet line under the header, cut short at its end, as the post a like in Activity is on.
+    var summary: String? = nil
 
     #if os(iOS)
     @State private var viewingPictures = false
@@ -268,7 +272,7 @@ struct CastRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: FatlineStyle.castGap) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    header
+                    (title ?? header)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     CastTime(cast: cast)
                 }
@@ -276,6 +280,13 @@ struct CastRow: View {
                     Text("Replying to \(Text(verbatim: replyingTo).font(FatlineStyle.metaStrong))")
                         .font(FatlineStyle.meta)
                         .foregroundStyle(FatlineStyle.secondary)
+                }
+                if let summary {
+                    Text(verbatim: summary)
+                        .font(FatlineStyle.body)
+                        .foregroundStyle(FatlineStyle.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 if !cast.text.isEmpty {
                     CastBodyText(text: cast.text)

@@ -19,34 +19,39 @@
 			productRefGroup = F47100000000000000000003;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (F47100000000000000000040, F47100000000000000000041, F47100000000000000000042, F47100000000000000000043, F47100000000000000000044, F47100000000000000000045);
+			targets = (F47100000000000000000040, F47100000000000000000041, F47100000000000000000042, F47100000000000000000043, F47100000000000000000044, F47100000000000000000045, F47100000000000000000046);
 		};
 		F47100000000000000000002 = {
 			isa = PBXGroup;
-			children = (F47100000000000000000004, F47100000000000000000010, F47100000000000000000011, F47100000000000000000012, F47100000000000000000013, F47100000000000000000014, F47100000000000000000015, F47100000000000000000003);
+			children = (F47100000000000000000004, F47100000000000000000010, F47100000000000000000011, F47100000000000000000016, F47100000000000000000012, F47100000000000000000013, F47100000000000000000014, F47100000000000000000015, F47100000000000000000003);
 			sourceTree = "<group>";
 		};
 		F47100000000000000000003 = {
 			isa = PBXGroup;
-			children = (F47100000000000000000030, F47100000000000000000031, F47100000000000000000032, F47100000000000000000033, F47100000000000000000034, F47100000000000000000035);
+			children = (F47100000000000000000030, F47100000000000000000031, F47100000000000000000032, F47100000000000000000033, F47100000000000000000034, F47100000000000000000035, F47100000000000000000036);
 			name = Products;
 			sourceTree = "<group>";
 		};
 		F47100000000000000000004 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 
 /* Folders. A file belongs to a target by being in one of its folders. */
-		F47100000000000000000010 = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (F47100000000000000000020, F47100000000000000000021); path = Shared; sourceTree = "<group>"; };
+		F47100000000000000000010 = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (F47100000000000000000020, F47100000000000000000021, F47100000000000000000025); path = Shared; sourceTree = "<group>"; };
 		F47100000000000000000011 = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (F47100000000000000000022); path = iPhone; sourceTree = "<group>"; };
 		F47100000000000000000012 = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (F47100000000000000000023); path = Mac; sourceTree = "<group>"; };
 		F47100000000000000000013 = {isa = PBXFileSystemSynchronizedRootGroup; path = Tests; sourceTree = "<group>"; };
 		F47100000000000000000014 = {isa = PBXFileSystemSynchronizedRootGroup; path = iPhoneUITests; sourceTree = "<group>"; };
 		F47100000000000000000015 = {isa = PBXFileSystemSynchronizedRootGroup; path = MacE2ETests; sourceTree = "<group>"; };
+		F47100000000000000000016 = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (F47100000000000000000024); path = iPhoneNotify; sourceTree = "<group>"; };
 
 /* Files in those folders that aren't built into the app. */
 		F47100000000000000000020 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Vendor/BLAKE3/LICENSE_CC0, Vendor/BLAKE3/README.md); target = F47100000000000000000040; };
 		F47100000000000000000021 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Vendor/BLAKE3/LICENSE_CC0, Vendor/BLAKE3/README.md); target = F47100000000000000000041; };
 		F47100000000000000000022 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Info.plist); target = F47100000000000000000040; };
 		F47100000000000000000023 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Fatline.entitlements, Info.plist); target = F47100000000000000000041; };
+		F47100000000000000000024 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Info.plist, Notify.entitlements); target = F47100000000000000000046; };
+
+/* The notification extension isn't given the Shared folder, only the files that open a note. Listing them for it adds them. */
+		F47100000000000000000025 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (PushDelivery.swift, PushKeychain.swift, PushNote.swift, PushTarget.swift); target = F47100000000000000000046; };
 
 /* Products. */
 		F47100000000000000000030 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Fatline.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -55,14 +60,15 @@
 		F47100000000000000000033 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F47100000000000000000034 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iPhoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F47100000000000000000035 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacE2ETests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F47100000000000000000036 = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = iPhoneNotify.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 
 /* Targets. */
 		F47100000000000000000040 = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F47100000000000000000061;
-			buildPhases = (F47100000000000000000050, F47100000000000000000051, F47100000000000000000052);
+			buildPhases = (F47100000000000000000050, F47100000000000000000051, F47100000000000000000052, F47100000000000000000095);
 			buildRules = ();
-			dependencies = ();
+			dependencies = (F47100000000000000000088);
 			fileSystemSynchronizedGroups = (F47100000000000000000010, F47100000000000000000011);
 			name = iPhone;
 			productName = Fatline;
@@ -129,6 +135,18 @@
 			productReference = F47100000000000000000035;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		F47100000000000000000046 = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F47100000000000000000067;
+			buildPhases = (F47100000000000000000092, F47100000000000000000093, F47100000000000000000094);
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (F47100000000000000000016);
+			name = iPhoneNotify;
+			productName = iPhoneNotify;
+			productReference = F47100000000000000000036;
+			productType = "com.apple.product-type.app-extension";
+		};
 
 /* Build phases. The folders fill them in. */
 		F47100000000000000000050 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
@@ -149,6 +167,13 @@
 		F4710000000000000000005F = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		F47100000000000000000090 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		F47100000000000000000091 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		F47100000000000000000092 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		F47100000000000000000093 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		F47100000000000000000094 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+
+/* The iPhone app carries the notification extension. */
+		F47100000000000000000095 = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (F47100000000000000000096); name = "Embed Foundation Extensions"; runOnlyForDeploymentPostprocessing = 0; };
+		F47100000000000000000096 = {isa = PBXBuildFile; fileRef = F47100000000000000000036; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 
 /* Test targets wait for the app they run inside. */
 		F47100000000000000000080 = {isa = PBXTargetDependency; target = F47100000000000000000040; targetProxy = F47100000000000000000081; };
@@ -159,6 +184,8 @@
 		F47100000000000000000085 = {isa = PBXContainerItemProxy; containerPortal = F47100000000000000000001; proxyType = 1; remoteGlobalIDString = F47100000000000000000040; remoteInfo = iPhone; };
 		F47100000000000000000086 = {isa = PBXTargetDependency; target = F47100000000000000000041; targetProxy = F47100000000000000000087; };
 		F47100000000000000000087 = {isa = PBXContainerItemProxy; containerPortal = F47100000000000000000001; proxyType = 1; remoteGlobalIDString = F47100000000000000000041; remoteInfo = Mac; };
+		F47100000000000000000088 = {isa = PBXTargetDependency; target = F47100000000000000000046; targetProxy = F47100000000000000000089; };
+		F47100000000000000000089 = {isa = PBXContainerItemProxy; containerPortal = F47100000000000000000001; proxyType = 1; remoteGlobalIDString = F47100000000000000000046; remoteInfo = iPhoneNotify; };
 
 /* Configuration lists. */
 		F47100000000000000000060 = {isa = XCConfigurationList; buildConfigurations = (F47100000000000000000070, F47100000000000000000071); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
@@ -168,6 +195,7 @@
 		F47100000000000000000064 = {isa = XCConfigurationList; buildConfigurations = (F47100000000000000000078, F47100000000000000000079); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		F47100000000000000000065 = {isa = XCConfigurationList; buildConfigurations = (F4710000000000000000007A, F4710000000000000000007B); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		F47100000000000000000066 = {isa = XCConfigurationList; buildConfigurations = (F4710000000000000000007C, F4710000000000000000007D); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		F47100000000000000000067 = {isa = XCConfigurationList; buildConfigurations = (F4710000000000000000007E, F4710000000000000000007F); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 
 /* Settings for every target. Signing.xcconfig supplies the team and bundle ID. */
 		F47100000000000000000070 = {
@@ -206,12 +234,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon-Dev";
 				CODE_SIGN_ENTITLEMENTS = iPhone/Fatline.entitlements;
 				CURRENT_PROJECT_VERSION = 6;
+				FATLINE_APP_GROUP = "group.$(FATLINE_BUNDLE_ID).dev";
 				GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "BLAKE3_USE_NEON=0", BLAKE3_NO_SSE2, BLAKE3_NO_SSE41, BLAKE3_NO_AVX2, BLAKE3_NO_AVX512);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iPhone/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Fatline Dev";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID).dev";
 				PRODUCT_MODULE_NAME = Fatline;
 				PRODUCT_NAME = Fatline;
@@ -229,12 +258,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = iPhone/Fatline.entitlements;
 				CURRENT_PROJECT_VERSION = 6;
+				FATLINE_APP_GROUP = "group.$(FATLINE_BUNDLE_ID)";
 				GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "BLAKE3_USE_NEON=0", BLAKE3_NO_SSE2, BLAKE3_NO_SSE41, BLAKE3_NO_AVX2, BLAKE3_NO_AVX512);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iPhone/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Fatline;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID)";
 				PRODUCT_MODULE_NAME = Fatline;
 				PRODUCT_NAME = Fatline;
@@ -264,7 +294,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID).dev";
 				PRODUCT_MODULE_NAME = Fatline;
 				PRODUCT_NAME = "Fatline Dev";
@@ -292,7 +322,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID)";
 				PRODUCT_MODULE_NAME = Fatline;
 				PRODUCT_NAME = Fatline;
@@ -415,6 +445,51 @@
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				TEST_TARGET_NAME = Mac;
+			};
+			name = Release;
+		};
+
+/* The iPhone app's notification extension, which opens each network's sealed note. Its versions follow the app's. */
+		F4710000000000000000007E = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = iPhoneNotify/Notify.entitlements;
+				CURRENT_PROJECT_VERSION = 6;
+				FATLINE_APP_GROUP = "group.$(FATLINE_BUNDLE_ID).dev";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iPhoneNotify/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Fatline Dev";
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
+				MARKETING_VERSION = 0.4.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID).dev.notify";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		F4710000000000000000007F = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = iPhoneNotify/Notify.entitlements;
+				CURRENT_PROJECT_VERSION = 6;
+				FATLINE_APP_GROUP = "group.$(FATLINE_BUNDLE_ID)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iPhoneNotify/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Fatline;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
+				MARKETING_VERSION = 0.4.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(FATLINE_BUNDLE_ID).notify";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};

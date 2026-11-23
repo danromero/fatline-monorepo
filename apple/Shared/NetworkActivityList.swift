@@ -1,20 +1,23 @@
 import SwiftUI
 
-/// What Activity has read, for one visit: the replies and mentions, where New ends, and for an admin
-/// how many are waiting to join.
+/// What Activity has read, for one visit: the replies and mentions, and on iPhone likes, where New
+/// ends, and for an admin how many are waiting to join.
 @MainActor
 @Observable
 final class NetworkActivityState {
     private(set) var items: [NetworkActivity.Item] = []
     private(set) var loaded = false
     private(set) var failure: String?
-    /// The newest item Activity had shown when this visit began. Items after it are New.
+    /// The newest reply or mention Activity had shown when this visit began. Ones after it are New.
     private(set) var seenBefore: Int64?
+    /// The same for likes, by when each post was last liked, which has a seen time of its own.
+    private(set) var likesSeenBefore: Int64?
     private(set) var waiting = 0
 
     /// A visit begins. Call it before `load`, which marks everything seen.
     func begin(_ model: NetworkModel) {
         seenBefore = model.activitySeen
+        likesSeenBefore = model.likesSeen
     }
 
     /// Reading Activity marks it seen, which clears its dot.
@@ -30,13 +33,58 @@ final class NetworkActivityState {
     }
 
     func isNew(_ item: NetworkActivity.Item) -> Bool {
-        seenBefore.map { item.post.time > $0 } ?? false
+        (item.isLike ? likesSeenBefore : seenBefore).map { item.when > $0 } ?? false
+    }
+}
+
+/// A like's row in Activity: who liked your post, and the post on one line.
+enum NetworkLikeRow {
+    /// A piece of the header. Names are bold, the words around them aren't.
+    struct Piece: Equatable {
+        let text: String
+        var isName = false
+    }
+
+    /// "helen liked your post", "helen and theo…", "helen, theo, and sana…", and past three names,
+    /// "helen, theo, and 3 others…". `names` are the newest likers, newest first.
+    static func header(names: [String], count: Int, reply: Bool) -> [Piece] {
+        let count = max(count, names.count)
+        // Everyone by name up to three, or else two names and the rest as a number.
+        let shown = count <= names.count ? Array(names.prefix(count)) : Array(names.prefix(2))
+        let others = count - shown.count
+        var parts = shown.map { Piece(text: $0, isName: true) }
+        if others > 0 { parts.append(Piece(text: others == 1 ? "1 other" : "\(others) others")) }
+        var pieces: [Piece] = []
+        for (index, part) in parts.enumerated() {
+            if index > 0 {
+                let last = index == parts.count - 1
+                pieces.append(Piece(text: parts.count == 2 ? " and " : last ? ", and " : ", "))
+            }
+            pieces.append(part)
+        }
+        pieces.append(Piece(text: reply ? " liked your reply" : " liked your post"))
+        return pieces
+    }
+
+    /// The liked post on one line: its text, or for one without, its link, or that it's a picture.
+    static func summary(of post: NetworkPost) -> String {
+        let text = post.text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        if !text.isEmpty { return text }
+        if let link = post.embeds.first(where: { $0.type == "link" })?.url.flatMap(URL.init(string:)) {
+            return FeedCast.label(for: link)
+        }
+        let pictures = post.embeds.filter { $0.type == "image" }.count
+        if pictures > 0 { return pictures == 1 ? "Picture" : "\(pictures) pictures" }
+        if post.embeds.contains(where: { $0.type == "post" }) { return "Quoted post" }
+        return post.parent == nil ? "Post" : "Reply"
     }
 }
 
 /// Activity's rows, in both apps: what arrived since the last look under New, and the rest under
 /// Earlier. Each row opens the replies it's part of, a reply shows the post it answers in a quiet
-/// card, and an admin sees requests to join first. It goes inside the screen's own scrolling stack.
+/// card, a like on iPhone shows your post on one line, and an admin sees requests to join first. It
+/// goes inside the screen's own scrolling stack.
 struct NetworkActivityList: View {
     let activity: NetworkActivityState
     let model: NetworkModel
@@ -81,16 +129,38 @@ struct NetworkActivityList: View {
     }
 
     @ViewBuilder private func rows(_ items: [NetworkActivity.Item], last: Bool) -> some View {
-        ForEach(items, id: \.post.hash) { item in
+        ForEach(items) { item in
             Button { open(item.threadRoot) } label: {
-                CastRow(cast: cast(for: item), handle: model.handle(for: item.post.fid),
-                        action: item.kind == "reply" ? "replied" : "mentioned you",
-                        badge: item.kind == "reply" ? "arrowshape.turn.up.left.fill" : "at")
+                row(item)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityHint("Opens the replies")
-            if !(last && item.post.hash == items.last?.post.hash) { CastDivider() }
+            if !(last && item.id == items.last?.id) { CastDivider() }
+        }
+    }
+
+    @ViewBuilder private func row(_ item: NetworkActivity.Item) -> some View {
+        if item.isLike, let newest = item.likers?.first {
+            // The newest liker's picture, at the newest like's time, over your post's text on one line.
+            let names = (item.likers ?? []).map { model.handle(for: $0.fid, named: $0.username) }
+            let header = NetworkLikeRow.header(names: names, count: item.count ?? names.count,
+                                               reply: item.parent != nil || item.post.parent != nil)
+            CastRow(cast: FeedCast(hash: item.post.hash, fid: newest.fid, time: item.when, text: "",
+                                   avatar: model.members.first { $0.fid == newest.fid }?.avatar, mediaHost: model.selectedHost),
+                    handle: names.first ?? "", badge: "heart.fill", title: title(header),
+                    summary: NetworkLikeRow.summary(of: item.post))
+        } else {
+            CastRow(cast: cast(for: item), handle: model.handle(for: item.post.fid),
+                    action: item.kind == "reply" ? "replied" : "mentioned you",
+                    badge: item.kind == "reply" ? "arrowshape.turn.up.left.fill" : "at")
+        }
+    }
+
+    /// One text, names bold, so a long header wraps as a sentence.
+    private func title(_ pieces: [NetworkLikeRow.Piece]) -> Text {
+        pieces.reduce(Text(verbatim: "")) { text, piece in
+            Text("\(text)\(Text(verbatim: piece.text).font(piece.isName ? FatlineStyle.bodyStrong : FatlineStyle.body))")
         }
     }
 

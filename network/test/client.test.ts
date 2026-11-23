@@ -99,6 +99,7 @@ describe("as a member", () => {
     await client.feed("c1");
     await client.thread("0x" + "ab".repeat(20));
     await client.activity();
+    await client.activity("c2", { likes: true });
     await client.members();
     await client.network();
     await client.updateProfile({ displayName: "Dan" });
@@ -113,6 +114,7 @@ describe("as a member", () => {
         "GET /feed?cursor=c1",
         `GET /posts/0x${"ab".repeat(20)}`,
         "GET /activity",
+        "GET /activity?cursor=c2&likes=1",
         "GET /members",
         "GET /network",
         "PATCH /me",

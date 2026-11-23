@@ -2,8 +2,14 @@ import SwiftUI
 
 @main
 struct FatlineApp: App {
+    @UIApplicationDelegateAdaptor(FatlineAppDelegate.self) private var appDelegate
+
     init() {
+        // The unit tests' host skips it, or it would clear a Simulator's saved account.
+        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let install = isTesting ? FreshInstall.Outcome.earlierInstall : FreshInstall.runForApp()
         LaunchLog.opened()
+        if install == .cleared { LaunchLog.record(.info, "Fresh install", "Cleared the sign-in an earlier install left") }
     }
 
     var body: some Scene {
@@ -43,6 +49,8 @@ private struct AppRoot: View {
                     LaunchLog.record(.info, "Went inactive")
                 case .active:
                     LaunchLog.cameBack()
+                    // Notifications may have been turned on or off in iOS Settings meanwhile.
+                    Task { await PushCenter.shared.refreshAuthorization() }
                 default:
                     break
                 }
@@ -65,6 +73,10 @@ private struct SplashScreen: View {
 /// The focus state lives here because a full-screen cover is a separate presentation:
 /// focus state owned by the view that presents the cover doesn't reach the editor.
 private struct CastEditor: View {
+    /// TextEditor's own space before the text and above its first line, which iOS sets.
+    static let leadingInset: CGFloat = 5 // layout-ok: UITextView's line fragment padding
+    static let topInset: CGFloat = 8 // layout-ok: UITextView's text container inset
+
     @Binding var text: String
     let ready: Bool
     @FocusState private var focused: Bool
@@ -83,13 +95,16 @@ private struct CastEditor: View {
                     Text("Write a cast…")
                         .font(FatlineStyle.body)
                         .foregroundStyle(FatlineStyle.secondary)
-                        .padding(.leading, 5)
-                        .padding(.top, 8)
+                        .padding(.leading, Self.leadingInset)
+                        .padding(.top, Self.topInset)
                         .accessibilityHidden(true)
                         .allowsHitTesting(false)
                 }
             }
-            .task(id: ready) { focused = ready }
+            // The keyboard comes up with the cover, not after it.
+            .defaultFocus($focused, true)
+            .onAppear { focused = ready }
+            .onChange(of: ready) { _, ready in focused = ready }
     }
 }
 
@@ -128,6 +143,8 @@ private struct Composer: View {
     @State private var builds = BuildCheck()
     /// The composer's cover zooms out of the Farcaster feed's Compose button.
     @Namespace private var composeZoom
+    /// Your Farcaster picture, on the composer's gutter, as the feed last read it.
+    @State private var ownPicture: URL?
     /// An alert shown during the splash would sit over it.
     let splashGone: Bool
 
@@ -157,8 +174,10 @@ private struct Composer: View {
                 // Its own identity, so switching networks starts clean.
                 NetworkHome(membership: membership) { addingNetwork = true }
                     .id(membership.host)
-            } else if session.account?.fid != nil, session.savedConnection == nil, !Connection.isSetByLaunch {
-                ConnectionSetup(finish: session.useConnection)
+            } else if let fid = session.account?.fid, session.savedConnection == nil, !Connection.isSetByLaunch {
+                // After Start Over there's no account, so Welcome shows by itself.
+                ConnectionSetup(signedInAs: session.account?.username ?? String(fid),
+                                finish: session.useConnection, startOver: session.startOver)
             } else if let fid = session.account?.fid {
                 FeedHome(
                     directory: PostingSession.accountFolder(fid),
@@ -172,7 +191,10 @@ private struct Composer: View {
                     connectionName: session.connection.name,
                     savedConnection: session.savedConnection,
                     changeConnection: session.useConnection,
-                    compose: session.openComposer,
+                    compose: { picture in
+                        ownPicture = picture
+                        session.openComposer()
+                    },
                     signOut: session.signOut,
                     deleteCast: session.deleteCast,
                     addNetwork: { addingNetwork = true },
@@ -189,6 +211,10 @@ private struct Composer: View {
             }
         }
         .tint(FatlineStyle.action)
+        // A network's feed counts as read only while the app is active with nothing over it.
+        .onChange(of: scenePhase == .active && !addingNetwork, initial: true) { _, inFront in
+            networks.appInFront = inFront
+        }
         .fullScreenCover(isPresented: $addingNetwork) {
             AddNetworkFlow { addingNetwork = false }
         }
@@ -219,6 +245,16 @@ private struct Composer: View {
             if session.ready { session.saveDraft() }
         }
         .onAppear(perform: session.loadSavedAccount)
+        .onAppear { PushCenter.shared.attach(networks) }
+        // Someone already in a network when notifications came: iOS asks once, after the splash.
+        .task(id: splashGone) {
+            guard splashGone, networks.memberships.contains(where: { $0.status == .approved }) else { return }
+            await PushCenter.shared.ask(for: nil)
+        }
+        // A tapped notification opens its network, over Add Network.
+        .onChange(of: networks.notificationOpening) { _, opening in
+            if opening != nil { addingNetwork = false }
+        }
         .task(id: session.account?.fid) { await session.checkKey() }
         .task { await builds.runIfDue() }
         #if DEBUG
@@ -227,6 +263,8 @@ private struct Composer: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
                 if session.ready { session.saveDraft() }
+                // What was read goes now, rather than waiting out the minute.
+                networks.reportSeenNow()
                 return
             }
             session.checkKeyIfDue()
@@ -246,13 +284,36 @@ private struct Composer: View {
         .environment(networks)
     }
 
+    /// The same header and column as a network's composer: your picture on the gutter and the cast in
+    /// the feed's column.
     private var composerSurface: some View {
-        VStack(spacing: 0) {
-            composerHeader
-            CastEditor(text: Bindable(session).draft, ready: session.ready)
-                .padding(.horizontal, Self.composerInset - 5)
-                // The editor's own 8-point inset puts the first line at the same height as a feed row.
-                .padding(.top, FatlineStyle.rowPadding - 8)
+        NavigationStack {
+            VStack(spacing: 0) {
+                CastDivider()
+                HStack(alignment: .top, spacing: FatlineStyle.avatarGap) {
+                    CastAvatar(url: ownPicture, handle: session.account?.username ?? "")
+                        .padding(.top, FatlineStyle.avatarTopInset)
+                        .accessibilityHidden(true)
+                    CastEditor(text: Bindable(session).draft, ready: session.ready)
+                        // The editor's own insets, 5 before the text and 8 above it, put its first letter
+                        // on the column and its first line level with the picture, as in a feed row.
+                        .padding(.leading, -CastEditor.leadingInset)
+                        .padding(.top, -CastEditor.topInset)
+                }
+                .padding(.horizontal, Self.composerInset)
+                .padding(.top, FatlineStyle.rowPadding)
+            }
+            .composerHeader(post: session.activePostTitle ?? (session.account?.pending == nil ? "Post" : "Retry"),
+                            canPost: !session.sendDisabled, working: session.activePostTitle != nil, canCancel: !session.busy,
+                            cancel: session.cancelComposer, send: {
+                                Platform.haptic(.tap)
+                                Task { await session.send() }
+                            }) {
+                ComposerTitle(name: "Farcaster", label: "Posting to Farcaster") {
+                    FarcasterMark(size: ComposerTitle<EmptyView>.markSize)
+                }
+            }
+            .background(FatlineStyle.paper.ignoresSafeArea())
         }
         .foregroundStyle(FatlineStyle.ink)
         .background(FatlineStyle.paper.ignoresSafeArea())
@@ -267,14 +328,25 @@ private struct Composer: View {
         }
         .overlay(alignment: .bottom) {
             // The feed takes over the toast as soon as the composer starts closing.
-            if session.showComposer { postToastHost.padding(.bottom, 12) }
+            if session.showComposer { postToastHost.padding(.bottom, FatlineStyle.groupGap) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // Keeps the row's height when it is empty, so toasts always sit in the same place.
-            composerStatus
-                .font(FatlineStyle.body)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .padding(.horizontal, Self.composerInset)
+            // Keeps the row's height when it is empty, so toasts always sit in the same place. From 280
+            // bytes the count is on the trailing gutter, as a network composer's is in its bar.
+            HStack(alignment: .firstTextBaseline, spacing: FatlineStyle.itemGap) {
+                composerStatus
+                Spacer(minLength: FatlineStyle.itemGap)
+                if session.draft.utf8.count >= 280 {
+                    Text("\(session.draft.utf8.count) / 320")
+                        .font(FatlineStyle.meta)
+                        .monospacedDigit()
+                        .foregroundStyle(session.draft.utf8.count > 320 ? FatlineStyle.danger : FatlineStyle.secondary)
+                        .accessibilityLabel("\(session.draft.utf8.count) of 320 bytes")
+                }
+            }
+            .font(FatlineStyle.body)
+            .frame(maxWidth: .infinity, minHeight: FatlineStyle.buttonHitHeight, alignment: .leading)
+            .padding(.horizontal, Self.composerInset)
         }
     }
 
@@ -299,42 +371,13 @@ private struct Composer: View {
         if networks.needsPhrase { Task { try? await networks.approveDevice(phrase: phrase) } }
     }
 
-    private var composerHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Button("Cancel", action: session.cancelComposer)
-            .font(FatlineStyle.body)
-            .frame(minHeight: 44)
-            .disabled(session.busy)
-            Spacer(minLength: 4)
-            if session.draft.utf8.count >= 280 {
-                Text("\(session.draft.utf8.count) / 320")
-                    .font(FatlineStyle.meta)
-                    .monospacedDigit()
-                    .foregroundStyle(session.draft.utf8.count > 320 ? FatlineStyle.danger : FatlineStyle.secondary)
-                    .accessibilityLabel("\(session.draft.utf8.count) of 320 bytes")
-            }
-            Button {
-                Platform.haptic(.tap)
-                Task { await session.send() }
-            } label: {
-                Text(session.activePostTitle ?? (session.account?.pending == nil ? "Post" : "Retry"))
-            }
-            // Wide enough for both labels, so the pill and the counter don't shift between them.
-            .buttonStyle(FatlinePrimaryButton(compact: true, minWidth: 76, isWorking: session.activePostTitle != nil))
-            .disabled(session.sendDisabled)
-        }
-        .frame(minHeight: FatlineStyle.headerHeight)
-        .padding(.horizontal, Self.composerInset)
-        .padding(.bottom, FatlineStyle.headerGap)
-    }
-
     @ViewBuilder private var composerStatus: some View {
         if session.saveFailed {
-            Button("Retry Save", action: session.saveDraft).frame(minHeight: 44)
+            Button("Retry Save", action: session.saveDraft).frame(minHeight: FatlineStyle.buttonHitHeight)
         } else if !session.ready {
-            Button("Retry Draft", action: session.loadDraft).frame(minHeight: 44)
+            Button("Retry Draft", action: session.loadDraft).frame(minHeight: FatlineStyle.buttonHitHeight)
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: FatlineStyle.itemGap) {
                 if let notice = session.notice {
                     Text(notice)
                         .font(FatlineStyle.meta)
@@ -342,7 +385,7 @@ private struct Composer: View {
                 }
                 if session.account?.pending != nil && !session.busy {
                     Button("Post Options") { showDiscardRetry = true }
-                        .frame(minHeight: 44)
+                        .frame(minHeight: FatlineStyle.buttonHitHeight)
                 }
             }
         }

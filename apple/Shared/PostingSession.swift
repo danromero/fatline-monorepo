@@ -69,6 +69,7 @@ final class PostingSession {
     /// deleting it, leaves that sign-in in place.
     func loadSavedAccount() {
         #if DEBUG
+        seedStuckAccountIfAsked()
         let ignoreSaved = ProcessInfo.processInfo.arguments.contains("-FatlineIgnoreSavedAccount")
         #else
         let ignoreSaved = false
@@ -76,6 +77,18 @@ final class PostingSession {
         account = ignoreSaved ? nil : try? PostingKeychain.load()
         if account?.fid != nil, !ready { loadDraft() }
     }
+
+    #if DEBUG
+    /// `-FatlineSeedStuckAccount YES` with `-FatlineProfile <name>`: a made-up account and no connection,
+    /// which opens Connect to Farcaster with Back. Only under a profile, so a real sign-in is never replaced.
+    private func seedStuckAccountIfAsked() {
+        guard UserDefaults.standard.bool(forKey: "FatlineSeedStuckAccount"), !DevProfile.suffix.isEmpty else { return }
+        var made = PostingAccount()
+        made.fid = 999_999_999
+        made.username = "stuck-test"
+        try? PostingKeychain.save(made)
+    }
+    #endif
 
     func useConnection(_ choice: ConnectionChoice) throws {
         try choice.save()
@@ -220,6 +233,21 @@ final class PostingSession {
     func signOut() throws {
         guard signOutBlock == nil else { return }
         try store?.save(draft)
+        try forgetAccount()
+    }
+
+    /// Start Over on `ConnectionSetup`: Sign Out without its checks. The composer can't open from that
+    /// screen, so an unsent cast or a draft that didn't save would otherwise keep someone there for good.
+    func startOver() throws {
+        if ready { try? store?.save(draft) }
+        try forgetAccount()
+        LaunchLog.record(.info, "Started over", "From Connect to Farcaster")
+    }
+
+    /// The key's removal goes through the current connection. From Start Over that's "Not Connected"
+    /// (`not-connected.invalid`), so it fails quietly and the key stops working 30 days after its last
+    /// use, as when Sign Out is offline.
+    private func forgetAccount() throws {
         let leaving = account
         try PostingKeychain.remove()
         revokeKey(of: leaving)

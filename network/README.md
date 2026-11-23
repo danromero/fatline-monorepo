@@ -59,6 +59,7 @@ It listens on `http://localhost:8787` with a local database. To reach it from a 
 | `FNAME_URL` | Defaults to Farcaster's fname server |
 | `HUB_URL` | A Snapchain HTTP API, such as `https://hub.example/v1`. With it, people the admin follows on Farcaster get in without waiting, unless the admin turns that off in Settings. The server pulls the follow list once a day, and when the admin asks on Settings, and joins check that list, never the hub. It also asks the hub for a new member's Farcaster picture when their app sent none. Without it, everyone waits |
 | `HUB_API_KEY` | Sent to `HUB_URL` as `x-api-key`, for hubs that need one. Set it as a secret |
+| `PUSH_RELAYS` | The relays the network sends notifications through, separated by commas. Defaults to `https://push.fatline.tech`. A device naming any other is refused. `none` turns notifications off |
 | `APPLE_APP_ID` | Optional. App IDs, such as `ABCDE12345.com.example.fatline`, separated by commas. With it, the network serves Apple's association file at `/.well-known/apple-app-site-association`, so those apps can open post links (`/p/<hash>`) themselves. Only an app whose Associated Domains name this network's domain uses it. Anything not shaped like an App ID is ignored |
 
 ## Run the tests

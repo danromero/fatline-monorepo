@@ -38,6 +38,12 @@ export interface Env {
    * post links themselves. With one, the network serves Apple's association file. Without it, links open the page.
    */
   APPLE_APP_ID?: string;
+  /**
+   * The relays this network sends notifications through, separated by commas. A device naming any
+   * other is refused, so nobody can point the server at an address of their choosing. Without it,
+   * `https://push.fatline.tech`. `none` sends no notifications.
+   */
+  PUSH_RELAYS?: string;
   /** Local tests only: where every fetch for avatars and previews goes instead, keeping its path. */
   TEST_FETCH_ORIGIN?: string;
   /**

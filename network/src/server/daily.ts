@@ -16,6 +16,8 @@ export const DAILY = {
   /** Pictures. A post takes two at most, so 25 posts with pictures. */
   uploads: 50,
   reports: 20,
+  /** Test notifications from Debug, each one relay call. */
+  tests: 20,
   /** Sign-ins and joins, counted per account once its key is shown to be its own. The apps need a few a month. */
   signins: 100,
   joins: 50,

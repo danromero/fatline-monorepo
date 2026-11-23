@@ -4,6 +4,7 @@ import { badRequest, booleanField, choiceField, field, HttpError, json, noConten
 import { pullFollows } from "./follows.ts";
 import { addMember } from "./join.ts";
 import { collect } from "./media.ts";
+import { notifyApproved } from "./push.ts";
 import { logStatement, memberRow, setSetting, settings } from "./store.ts";
 
 /**
@@ -41,6 +42,7 @@ export async function approve(context: Context, viewer: Viewer, fidText: string)
   if (!request) throw problem("no-request");
   // The owner the request last read, which the hourly job checks again first.
   await addMember(context, fid, request.custody, 0, request.avatar, "member", [logStatement(context, viewer.fid, "approved", { fid })]);
+  notifyApproved(context, fid);
   return noContent();
 }
 

@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 /// A link in the text becomes a card, which the post carries as its link while there's room, until the
 /// card's × takes it off and leaves the link as plain text. The sheet posts to the network it opened
 /// on, and names it, so a post can't land in another network by mistake. Its text is kept per network
-/// until the post is in.
+/// until the post is in. The draft looks like the post it becomes: your picture on the gutter, and the
+/// text, pictures, and link card in the feed's column. Typing @ suggests the network's members.
 struct NetworkComposer: View {
     let host: String
 
@@ -15,6 +16,8 @@ struct NetworkComposer: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var text = ""
+    /// The caret, for the @name being typed.
+    @State private var selection: TextSelection?
     @State private var images: [NetworkImage] = []
     @State private var removedLinks: Set<URL> = []
     /// The link card's title and description, with the link they were read for.
@@ -31,9 +34,6 @@ struct NetworkComposer: View {
     @State private var posted = false
     @FocusState private var focused: Bool
 
-    /// The network's mark in the header.
-    private static let markSize: CGFloat = 20 // layout-ok: the mark beside a 16-point title, as on the canvas
-
     private var destination: NetworkMembership? { model.memberships.first { $0.host == host } }
     private var drafts: DraftStore { NetworkDrafts.store(for: host) }
     private var count: Int { NetworkMessages.characterCount(text) }
@@ -48,32 +48,35 @@ struct NetworkComposer: View {
         !sending && destination != nil && !over
             && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty)
     }
+    private var yourHandle: String { model.you?.handle ?? destination.map { model.handle(for: $0.fid) } ?? "" }
+    private var yourPicture: URL? { model.you?.avatar.flatMap { FeedCast.networkMediaURL($0, host: host) } }
+    /// The @name just before the caret, while the text has focus.
+    private var mention: (range: Range<String.Index>, name: String)? {
+        guard focused, case .selection(let range)? = selection?.indices, range.isEmpty, range.upperBound <= text.endIndex else { return nil }
+        return MentionSuggestions.query(in: text, caret: range.upperBound)
+    }
+    /// The members it could be. The members are the network's that's showing, which is this one's.
+    private var suggestions: [NetworkMember] {
+        guard let mention, let you = destination?.fid, host == model.selectedHost else { return [] }
+        return MentionSuggestions.members(matching: mention.name, in: model.members, you: you,
+                                          talkedWith: MentionSuggestions.talkedWith(in: model.posts, you: you))
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    TextField("Post", text: $text, prompt: Text("Write a post…").foregroundStyle(FatlineStyle.secondary), axis: .vertical)
-                        .font(FatlineStyle.body)
-                        .lineSpacing(FatlineStyle.bodyLineSpacing)
-                        .focused($focused)
-                        .accessibilityIdentifier("network-post-text")
-                    if !images.isEmpty || link != nil {
-                        attachments.padding(.top, FatlineStyle.gutter)
+                    CastDivider()
+                    HStack(alignment: .top, spacing: FatlineStyle.avatarGap) {
+                        CastAvatar(url: yourPicture, handle: yourHandle)
+                            .padding(.top, FatlineStyle.avatarTopInset)
+                            .accessibilityHidden(true)
+                        column
                     }
-                    if let failure {
-                        Text(failure)
-                            .font(FatlineStyle.meta)
-                            .foregroundStyle(FatlineStyle.danger)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, FatlineStyle.itemGap)
-                    }
+                    .padding(.horizontal, FatlineStyle.gutter)
+                    .padding(.top, FatlineStyle.rowPadding)
+                    .padding(.bottom, FatlineStyle.gutter)
                 }
-                .padding(.horizontal, FatlineStyle.gutter)
-                .padding(.top, FatlineStyle.itemGap)
-                .padding(.bottom, FatlineStyle.gutter)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollDismissesKeyboard(.interactively)
             // A tap anywhere under the text goes to the text.
@@ -82,17 +85,34 @@ struct NetworkComposer: View {
                     .contentShape(.rect)
                     .onTapGesture { focused = true }
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    let members = suggestions
+                    if !members.isEmpty {
+                        MentionList(members: members, host: host, pick: complete)
+                    }
+                    bar
+                }
+            }
+            .composerHeader(post: sending ? "Posting…" : "Post", canPost: canSend, working: sending, canCancel: !sending,
+                            cancel: cancel, send: send) {
+                if let destination {
+                    ComposerTitle(name: destination.title, label: "Posting to \(destination.label)") {
+                        NetworkMark(name: destination.title, icon: destination.icon, size: ComposerTitle<EmptyView>.markSize)
+                    }
+                }
+            }
+            .background(FatlineStyle.paper.ignoresSafeArea())
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bar }
         .foregroundStyle(FatlineStyle.ink)
         .background(FatlineStyle.paper.ignoresSafeArea())
         .interactiveDismissDisabled(sending)
-        .task {
+        // The draft is read before the sheet's first frame, so the text is there as it slides up.
+        .onAppear {
             if !loaded {
                 text = (try? drafts.load()) ?? ""
                 loaded = true
             }
-            focused = true
         }
         .task(id: text) {
             // A change to the text cancels this wait, so a save happens once typing pauses.
@@ -121,37 +141,38 @@ struct NetworkComposer: View {
         }
     }
 
-    /// Cancel on the gutter, where the post goes in the middle, and Post on the trailing gutter.
-    private var header: some View {
-        HStack(spacing: FatlineStyle.itemGap) {
-            Button("Cancel", action: cancel)
+    /// The text, then pictures and the link card, in the feed's column beside your picture.
+    private var column: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("Post", text: $text, selection: $selection,
+                      prompt: Text("Write a post…").foregroundStyle(FatlineStyle.secondary), axis: .vertical)
                 .font(FatlineStyle.body)
-                .frame(minHeight: FatlineStyle.buttonHitHeight)
-                .disabled(sending)
-                .fixedSize()
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let destination {
-                HStack(spacing: FatlineStyle.itemGap) {
-                    NetworkMark(name: destination.title, icon: destination.icon, size: Self.markSize)
-                    Text(verbatim: destination.title)
-                        .font(FatlineStyle.bodyStrong)
-                        .lineLimit(1)
-                }
-                .layoutPriority(1)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Posting to \(destination.label)")
+                .lineSpacing(FatlineStyle.bodyLineSpacing)
+                .focused($focused)
+                // Focused as it appears, so the keyboard comes up with the sheet, not after it.
+                .onAppear { focused = true }
+                .accessibilityIdentifier("network-post-text")
+            if !images.isEmpty || link != nil {
+                attachments.padding(.top, FatlineStyle.gutter)
             }
-            Button(sending ? "Posting…" : "Post", action: send)
-                .buttonStyle(FatlinePrimaryButton(compact: true, minWidth: FatlineStyle.postPillWidth, isWorking: sending))
-                .disabled(!canSend)
-                .accessibilityIdentifier("network-post")
-                .fixedSize()
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            if let failure {
+                Text(failure)
+                    .font(FatlineStyle.meta)
+                    .foregroundStyle(FatlineStyle.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, FatlineStyle.itemGap)
+            }
         }
-        .padding(.horizontal, FatlineStyle.gutter)
-        .frame(minHeight: FatlineStyle.sheetHeaderHeight)
-        // Like the feed's title, it stops growing before the network's name has no room left.
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Puts in the member's whole @username and a space, with the caret after it.
+    private func complete(_ member: NetworkMember) {
+        guard let mention else { return }
+        Platform.haptic(.pick)
+        let done = MentionSuggestions.complete(text, range: mention.range, with: member.username)
+        text = done.text
+        selection = TextSelection(insertionPoint: done.caret)
     }
 
     /// Pictures, then the link card while there's room: a full-width card on its own, or one as tall as
@@ -302,7 +323,9 @@ struct NetworkComposer: View {
         failure = nil
         Task {
             do {
-                try await model.post(to: host, text: text, link: link?.absoluteString, images: images)
+                // A picked @name leaves a space after it, which the post doesn't need.
+                try await model.post(to: host, text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                     link: link?.absoluteString, images: images)
                 posted = true
                 try? drafts.save("")
                 Platform.haptic(.done)

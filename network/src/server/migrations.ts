@@ -222,4 +222,43 @@ export const MIGRATIONS: string[][] = [
     // at a page, where the feed's own index only reaches posts.
     `CREATE INDEX posts_newest ON posts (time DESC, hash DESC) WHERE deleted IS NULL`,
   ],
+  [
+    // A like keeps its post's author, so a member's activity reads likes on their posts by index, newest
+    // first, stopping at a page, instead of every post they ever wrote. Likes already here get it from
+    // their posts, and the trigger gives it to a like an older deploy writes, so a rollback leaves none out.
+    `ALTER TABLE likes ADD COLUMN post_fid INTEGER`,
+    `UPDATE likes SET post_fid = (SELECT p.fid FROM posts p WHERE p.hash = likes.post)`,
+    `CREATE INDEX likes_by_post_fid ON likes (post_fid, time DESC, post DESC, fid)`,
+    // A post's likes by time, so finding its newest like is a seek, however many it has.
+    `CREATE INDEX likes_by_post_and_time ON likes (post, time, fid)`,
+    `CREATE TRIGGER likes_post_fid AFTER INSERT ON likes WHEN NEW.post_fid IS NULL
+      BEGIN UPDATE likes SET post_fid = (SELECT fid FROM posts WHERE hash = NEW.post) WHERE post = NEW.post AND fid = NEW.fid; END`,
+  ],
+  [
+    // Where each device hears from this network, by its network key, which it goes with: the relay and
+    // handle its notes go to, the key they're sealed with, and what it wants to hear. level is "all",
+    // "replies", or "off"; requests and reports are the admin's own switches. post_hour, post_count, and
+    // post_fids are the new posts it heard of in the latest hour, and three of their authors, for one
+    // notification that updates in place. A new hour starts them again.
+    `CREATE TABLE push_targets (
+      network_key TEXT PRIMARY KEY, fid INTEGER NOT NULL, relay TEXT NOT NULL, handle TEXT NOT NULL, key TEXT NOT NULL,
+      level TEXT NOT NULL DEFAULT 'all', requests INTEGER NOT NULL DEFAULT 1, reports INTEGER NOT NULL DEFAULT 1, added INTEGER NOT NULL,
+      post_hour INTEGER NOT NULL DEFAULT 0, post_count INTEGER NOT NULL DEFAULT 0, post_fids TEXT NOT NULL DEFAULT '[]')`,
+    `CREATE INDEX push_targets_by_fid ON push_targets (fid)`,
+    `CREATE INDEX push_targets_by_level ON push_targets (level, fid)`,
+    `CREATE INDEX push_targets_by_handle ON push_targets (handle)`,
+  ],
+  [
+    // Twice a day: a summary of unread new posts at 9 a.m. and 9 p.m. where each device is. A member's
+    // seen is the time of the newest post they've had on screen, on any device, so reading anywhere
+    // counts. Each device keeps its time zone, the last slot it was due at (a time, so devices in
+    // different zones compare by one number), and the newest post its last summary counted, so a
+    // summary only goes when something's new. A device here already starts from when it was added.
+    `ALTER TABLE members ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE push_targets ADD COLUMN tz TEXT NOT NULL DEFAULT 'UTC'`,
+    `ALTER TABLE push_targets ADD COLUMN digest_slot INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE push_targets ADD COLUMN digest_mark INTEGER NOT NULL DEFAULT 0`,
+    `UPDATE push_targets SET digest_slot = added`,
+    `CREATE INDEX push_targets_by_digest ON push_targets (level, tz, digest_slot)`,
+  ],
 ];

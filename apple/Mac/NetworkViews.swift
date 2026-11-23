@@ -83,26 +83,36 @@ struct NetworkWindow: View {
     }
 
     private var feed: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if let problem = model.problem {
-                    FeedMessage(text: problem, color: FatlineStyle.danger)
-                    CastDivider()
+        VStack(spacing: 0) {
+            // Stays under the title until the problem clears, as on the Farcaster feed. The model waits
+            // until reads keep failing before it sets one.
+            if let problem = model.problem, !model.posts.isEmpty {
+                FeedProblemBanner(message: problem, lastRead: model.lastRead, checking: model.loading) {
+                    Task { await model.refresh() }
                 }
-                ForEach(model.posts) { post in
-                    NetworkPostRow(post: post) { state.networkPath.append(.thread(post)) }
-                    if post.id != model.posts.last?.id { CastDivider() }
-                }
+                .frame(maxWidth: FatlineStyle.columnMaxWidth)
+                FatlineDivider()
             }
-            .frame(maxWidth: FatlineStyle.columnMaxWidth)
-            .padding(.bottom, 76) // layout-ok: room to scroll the last post clear of the floating plus, as in the feed
-            .frame(maxWidth: .infinity)
-        }
-        .overlay {
-            if model.posts.isEmpty && model.lastRead != nil {
-                Text("No posts yet")
-                    .font(FatlineStyle.body)
-                    .foregroundStyle(FatlineStyle.secondary)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.posts) { post in
+                        NetworkPostRow(post: post) { state.networkPath.append(.thread(post)) }
+                        if post.id != model.posts.last?.id { CastDivider() }
+                    }
+                }
+                .frame(maxWidth: FatlineStyle.columnMaxWidth)
+                .padding(.bottom, 76) // layout-ok: room to scroll the last post clear of the floating plus, as in the feed
+                .frame(maxWidth: .infinity)
+            }
+            .overlay {
+                if model.posts.isEmpty {
+                    Text(emptyMessage)
+                        .font(FatlineStyle.body)
+                        .foregroundStyle(FatlineStyle.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, FatlineStyle.gutter)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .overlay(alignment: .bottom) {
@@ -113,6 +123,13 @@ struct NetworkWindow: View {
             .padding(.bottom, FatlineStyle.gutter)
             .frame(maxWidth: FatlineStyle.columnMaxWidth, alignment: .trailing)
         }
+    }
+
+    /// As on iPhone, and as the Farcaster feed words its own.
+    private var emptyMessage: String {
+        if model.problem != nil { return "Couldn’t load this network. Press ⌘R to try again." }
+        if model.lastRead == nil { return "Loading…" }
+        return "No posts yet"
     }
 }
 
@@ -140,8 +157,12 @@ struct NetworkPostRow: View {
     var place = Place.feed
     /// What Reply does: open the replies from the feed, or go to the reply field beside them.
     let reply: () -> Void
+    /// After a like gets through: a thread reads itself again, since the feed's read doesn't reach it.
+    var liked: () async -> Void = {}
 
     @Environment(AppState.self) private var state
+    /// A like as clicked, shown until the network answers and the post reads again, as on iPhone.
+    @State private var pending: (liked: Bool, likes: Int)?
     @State private var menuOpen = false
     @State private var confirmingDelete = false
     @State private var reporting = false
@@ -150,6 +171,8 @@ struct NetworkPostRow: View {
     private var model: NetworkModel { state.networks }
     private var handle: String { model.handle(for: post.fid) }
     private var isOwn: Bool { post.fid == model.ownFID }
+    private var isLiked: Bool { pending?.liked ?? post.liked }
+    private var likes: Int { pending?.likes ?? post.likes }
     /// In the feed a reply says whose post it answers. Under that post it needn't.
     private var replyingTo: String? {
         guard place == .feed, post.parent != nil, let fid = post.parentFid else { return nil }
@@ -209,12 +232,10 @@ struct NetworkPostRow: View {
                 actionSlot(symbol: "bubble.left", count: post.replies, color: FatlineStyle.secondary, action: reply)
                     .accessibilityLabel(post.replies == 1 ? "1 reply" : "\(post.replies) replies")
             }
-            actionSlot(symbol: post.liked ? "heart.fill" : "heart", count: post.likes,
-                       color: post.liked ? FatlineStyle.action : FatlineStyle.secondary) {
-                Task { await model.toggleLike(post) }
-            }
-            .accessibilityLabel(post.liked ? "Unlike" : "Like")
-            .accessibilityValue(post.likes == 1 ? "1 like" : "\(post.likes) likes")
+            actionSlot(symbol: isLiked ? "heart.fill" : "heart", count: likes,
+                       color: isLiked ? FatlineStyle.action : FatlineStyle.secondary, action: like)
+            .accessibilityLabel(isLiked ? "Unlike" : "Like")
+            .accessibilityValue(likes == 1 ? "1 like" : "\(likes) likes")
         }
         .buttonStyle(.plain)
         .font(FatlineStyle.meta)
@@ -268,6 +289,19 @@ struct NetworkPostRow: View {
         }
     }
 
+    /// Fills the heart at once. A second click while the first is on its way does nothing, so the
+    /// network never gets a like and an unlike for the same post out of order.
+    private func like() {
+        guard pending == nil else { return }
+        let now = !isLiked
+        pending = (now, max(0, likes + (now ? 1 : -1)))
+        Task {
+            await model.toggleLike(post)
+            await liked()
+            pending = nil
+        }
+    }
+
     private func report() {
         let note = String(reportNote.trimmingCharacters(in: .whitespacesAndNewlines).prefix(NetworkMessages.maxCharacters))
         Task {
@@ -286,6 +320,9 @@ struct NetworkThreadView: View {
     @State private var reply = ""
     @State private var sending = false
     @State private var failure: String?
+    /// The reply just sent, under the others from the moment Post is clicked until the network's copy
+    /// replaces it.
+    @State private var sent: NetworkPost?
     /// The network this thread is on, which a reply goes to whatever is showing later.
     @State private var host: String?
     @FocusState private var replyFocused: Bool
@@ -293,6 +330,10 @@ struct NetworkThreadView: View {
     /// The post whose replies these are. Opened from a reply in the feed, it's the post that reply
     /// answers, which shows once it's read.
     private var shown: NetworkPost? { root ?? (post.parent == nil ? post : nil) }
+    private var listed: [NetworkPost] {
+        guard let sent, !replies.contains(where: { $0.hash == sent.hash }) else { return replies }
+        return replies + [sent]
+    }
     private var canSend: Bool {
         !sending && !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && NetworkMessages.characterCount(reply) <= NetworkMessages.maxCharacters
@@ -304,24 +345,26 @@ struct NetworkThreadView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if let shown {
-                            NetworkPostRow(post: shown, place: .root) { replyFocused = true }
+                            NetworkPostRow(post: shown, place: .root, reply: { replyFocused = true }, liked: load)
                             CastDivider()
                         }
                         if let failure {
                             FeedMessage(text: failure, color: FatlineStyle.danger)
-                        } else if loaded && replies.isEmpty {
+                        } else if loaded && listed.isEmpty {
                             FeedMessage(text: "No replies yet")
                         }
-                        ForEach(replies) { item in
-                            NetworkPostRow(post: item, place: .reply) { replyFocused = true }
+                        ForEach(listed) { item in
+                            NetworkPostRow(post: item, place: .reply, reply: { replyFocused = true }, liked: load)
+                                // Not liked or deleted until the network has it.
+                                .allowsHitTesting(item.hash != sent?.hash)
                                 .id(item.id)
-                            if item.id != replies.last?.id { CastDivider() }
+                            if item.id != listed.last?.id { CastDivider() }
                         }
                     }
                     .frame(maxWidth: FatlineStyle.columnMaxWidth)
                     .frame(maxWidth: .infinity)
                 }
-                .onChange(of: replies.last?.id) { _, last in
+                .onChange(of: listed.last?.id) { _, last in
                     if let last { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
                 }
             }
@@ -348,8 +391,9 @@ struct NetworkThreadView: View {
                     .padding(.vertical, FatlineStyle.castGap + 1) // layout-ok: centers a 20-point line in 30
                     .frame(minHeight: FatlineStyle.compactButtonHeight)
                     .background(FatlineStyle.quiet, in: .rect(cornerRadius: FatlineStyle.compactButtonHeight / 2, style: .continuous))
-                Button(sending ? "Posting…" : "Post", action: send)
-                    .buttonStyle(FatlinePrimaryButton(compact: true, minWidth: 68, isWorking: sending)) // layout-ok: the composer's Post width
+                // It stays Post: the reply shows in the thread as it goes.
+                Button("Post", action: send)
+                    .buttonStyle(FatlinePrimaryButton(compact: true, minWidth: 68)) // layout-ok: the composer's Post width
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!canSend)
             }
@@ -366,6 +410,7 @@ struct NetworkThreadView: View {
             let thread = try await state.networks.thread(post.parent ?? post.hash)
             root = thread.post
             replies = thread.replies
+            if replies.contains(where: { $0.hash == sent?.hash }) { sent = nil }
             failure = nil
         } catch is CancellationError {
             return
@@ -375,19 +420,25 @@ struct NetworkThreadView: View {
         loaded = true
     }
 
+    /// The field empties and the reply shows under the others at once, then goes. If it doesn't go, it
+    /// comes off the list and its text goes back in the field.
     private func send() {
         guard canSend, let host, let shown else { return }
+        let text = reply
         sending = true
         failure = nil
+        reply = ""
         Task {
             do {
-                try await state.networks.post(to: host, text: reply, parent: shown)
-                reply = ""
+                try await state.networks.post(to: host, text: text, parent: shown) { sent = $0 }
+                sending = false
                 await load()
             } catch {
+                sent = nil
+                sending = false
                 failure = error.localizedDescription
+                if reply.isEmpty { reply = text }
             }
-            sending = false
         }
     }
 }

@@ -20,7 +20,8 @@ struct FeedHome: View {
     let connectionName: String
     let savedConnection: ConnectionChoice?
     let changeConnection: (ConnectionChoice) throws -> Void
-    let compose: () -> Void
+    /// Opens the composer, with your Farcaster picture for it once the feed has read it.
+    let compose: (URL?) -> Void
     let signOut: () throws -> Void
     let deleteCast: (FeedCast) async throws -> Void
     /// Starts joining a network, from the network menu. With no network yet, that's the way to add one.
@@ -47,7 +48,7 @@ struct FeedHome: View {
 
     init(directory: URL, fid: UInt64, username: String?, signedIn: Bool, signOutBlock: String?, notice: String?, latestPost: FeedCast?,
          canDelete: Bool, connectionName: String, savedConnection: ConnectionChoice?,
-         changeConnection: @escaping (ConnectionChoice) throws -> Void, compose: @escaping () -> Void,
+         changeConnection: @escaping (ConnectionChoice) throws -> Void, compose: @escaping (URL?) -> Void,
          signOut: @escaping () throws -> Void, deleteCast: @escaping (FeedCast) async throws -> Void,
          addNetwork: @escaping () -> Void, composeZoom: Namespace.ID, othersHaveNews: Bool = false, toast: AnyView = AnyView(EmptyView())) {
         _model = State(initialValue: FeedModel(directory: directory, ownFID: fid, ownHandle: username))
@@ -76,7 +77,7 @@ struct FeedHome: View {
         home
             .tint(FatlineStyle.action)
             .overlay {
-                ComposeButton(zoom: composeZoom, action: compose)
+                ComposeButton(zoom: composeZoom) { compose(picture) }
             }
         .sheet(isPresented: $showingSettings) { settings }
         .task { await model.start(signedIn: signedIn) }

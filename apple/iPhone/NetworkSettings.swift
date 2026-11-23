@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Settings for the network that's showing, the last tab: you there with the network's name and
-/// address, then Profile, Members, and Manage Network for admins, Debug and the version, and Leave at
+/// address, then Profile, Notifications, Members, and Manage Network for admins, Debug and the version, and Leave at
 /// the bottom, apart so it's hard to reach by accident. A network that hasn't let you in has Debug and
 /// Remove from This iPhone. It follows the Farcaster Settings row for row.
 struct NetworkSettingsView: View {
@@ -32,6 +32,12 @@ struct NetworkSettingsView: View {
                     Button { open(.profile) } label: { SettingsRow(symbol: "person", title: "Profile") }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("network-settings-profile")
+                    TextColumnDivider()
+                    Button { open(.notifications) } label: {
+                        SettingsRow(symbol: "bell", title: "Notifications", value: model.pushChoices(for: membership.host).level.title)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("network-settings-notifications")
                     TextColumnDivider()
                     Button { open(.members) } label: {
                         SettingsRow(symbol: "person.2", title: "Members", value: model.members.isEmpty ? nil : "\(model.members.count)")

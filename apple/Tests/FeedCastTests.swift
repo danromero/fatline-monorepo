@@ -811,6 +811,18 @@ final class FeedRefreshTests: XCTestCase {
         XCTAssertFalse(watch.showsDot(newest: new, inFront: false))
         XCTAssertFalse(watch.showsDot(newest: old, inFront: false), "A deleted cast doesn't make older ones new")
     }
+
+    func testTheMenuBarDotAlsoMeansNewsInANetworkSinceTheWindowWasInFront() {
+        var watch = NetworkNewsWatch()
+        XCTAssertFalse(watch.showsDot(newest: nil, inFront: false))
+        XCTAssertFalse(watch.showsDot(newest: 100, inFront: false), "What the first read finds isn't news")
+        XCTAssertTrue(watch.showsDot(newest: 200, inFront: false))
+        XCTAssertTrue(watch.showsDot(newest: 200, inFront: false))
+        XCTAssertFalse(watch.showsDot(newest: 200, inFront: true))
+        XCTAssertFalse(watch.showsDot(newest: 200, inFront: false))
+        XCTAssertFalse(watch.showsDot(newest: 150, inFront: false), "Leaving a network doesn't make older news new")
+        XCTAssertTrue(watch.showsDot(newest: 300, inFront: false))
+    }
     #endif
 
     func testNoMarkerWhenNothingIsNewOrOnlyThisAccountPosted() async {

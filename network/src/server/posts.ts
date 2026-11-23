@@ -194,11 +194,25 @@ async function cachedRead(context: Context, tag: string, build: () => Promise<un
   return new Response(text, { headers });
 }
 
-/** GET /activity: replies to your posts and mentions of you, newest first. */
+type ActivityRow = { kind: "reply" | "mention" | "like"; hash: string; time: number };
+
+/** A like by someone other than the viewer, `?1`, and not by someone they muted. */
+const LIKED_BY_OTHERS = (like: string) => `${like}.fid != ?1 AND ${like}.fid NOT IN (SELECT muted FROM mutes WHERE fid = ?1)`;
+
+/** How many of a post's newest likers a like item names. */
+const LIKERS = 3;
+
+/**
+ * GET /activity: replies to your posts and mentions of you, newest first. With `likes=1`, likes on your
+ * posts too, one item a post, placed by its newest like, without your own likes or those of people you
+ * muted. An app asks for them once it can show them; one that doesn't ask gets replies and mentions, as before.
+ */
 export async function activity(context: Context, viewer: Viewer, request: Request) {
-  const cursorText = new URL(request.url).searchParams.get("cursor");
+  const parameters = new URL(request.url).searchParams;
+  const cursorText = parameters.get("cursor");
   const cursor = readCursor(cursorText);
-  const tag = await versionTag(context, viewer.fid, `activity/${cursorText ?? ""}`);
+  const likes = parameters.get("likes") === "1";
+  const tag = await versionTag(context, viewer.fid, `activity${likes ? "+likes" : ""}/${cursorText ?? ""}`);
   if (request.headers.get("if-none-match") === tag) return notModified(tag);
   return cachedRead(context, tag, async () => {
     // Replies to you and mentions of you, each read newest first by its own index and stopped at a page,
@@ -209,18 +223,31 @@ export async function activity(context: Context, viewer: Viewer, request: Reques
           AND fid NOT IN (SELECT muted FROM mutes WHERE fid = ?1) ${cursor ? "AND (time < ?2 OR (time = ?2 AND hash < ?3))" : ""}
         ORDER BY time DESC, hash DESC LIMIT ${PAGE + 1}`)
       .bind(...params)
-      .all<{ kind: "reply" | "mention"; hash: string; time: number }>();
+      .all<ActivityRow>();
     const mentions = await context.db
       .prepare(`SELECT 'mention' AS kind, post AS hash, time FROM mentions WHERE fid = ?1
           AND author NOT IN (SELECT muted FROM mutes WHERE fid = ?1) ${cursor ? "AND (time < ?2 OR (time = ?2 AND post < ?3))" : ""}
         ORDER BY time DESC, post DESC LIMIT ${PAGE + 1}`)
       .bind(...params)
-      .all<{ kind: "reply" | "mention"; hash: string; time: number }>();
-    const newest = (a: { kind: string; hash: string; time: number }, b: { kind: string; hash: string; time: number }) =>
+      .all<ActivityRow>();
+    // Likes on your posts the same way, by their own index: each post's newest like stands for the post,
+    // so a post is one item, at the time of its newest like.
+    const liked = likes
+      ? await context.db
+        .prepare(`SELECT 'like' AS kind, l.post AS hash, l.time FROM likes l WHERE l.post_fid = ?1 AND ${LIKED_BY_OTHERS("l")}
+            AND (l.time, l.fid) = (SELECT n.time, n.fid FROM likes n WHERE n.post = l.post AND ${LIKED_BY_OTHERS("n")}
+              ORDER BY n.time DESC, n.fid DESC LIMIT 1)
+            ${cursor ? "AND (l.time < ?2 OR (l.time = ?2 AND l.post < ?3))" : ""}
+          ORDER BY l.time DESC, l.post DESC LIMIT ${PAGE + 1}`)
+        .bind(...params)
+        .all<ActivityRow>()
+      : { results: [] };
+    const newest = (a: ActivityRow, b: ActivityRow) =>
       b.time - a.time || (b.hash > a.hash ? 1 : b.hash < a.hash ? -1 : 0) || (b.kind > a.kind ? 1 : b.kind < a.kind ? -1 : 0);
-    const items = { results: [...replies.results, ...mentions.results].sort(newest).slice(0, PAGE + 1) };
+    const items = { results: [...replies.results, ...mentions.results, ...liked.results].sort(newest).slice(0, PAGE + 1) };
     const page = items.results.slice(0, PAGE);
-    // A reply that also mentions you shows once, as a reply.
+    // A reply that also mentions you shows once, as a reply. A liked post is always yours, so it's never
+    // one of those.
     const seen = new Set<string>();
     const unique = page.filter((item) => !seen.has(item.hash) && seen.add(item.hash));
     const hashes = unique.map((item) => item.hash);
@@ -237,10 +264,34 @@ export async function activity(context: Context, viewer: Viewer, request: Reques
     const parentPosts = await postsJSON(context, viewer, parentRows, { nested: true });
     const parents = new Map(parentRows.map((row, index) => [row.hash, parentPosts[index]]));
     const parentOf = new Map(rows.map((row) => [row.hash, row.parent ? (parents.get(row.parent) ?? null) : null]));
+    // Who liked each liked post on the page, newest first, sorted here rather than by D1, which counts
+    // a sort's rows as read. A post has at most one like a member.
+    const likedHashes = unique.flatMap((item) => (item.kind === "like" ? [item.hash] : []));
+    const likers = new Map<string, number[]>();
+    if (likedHashes.length) {
+      const likeRows = await context.db
+        .prepare(`SELECT l.post, l.fid, l.time FROM likes l WHERE l.post IN (SELECT value FROM json_each(?2)) AND ${LIKED_BY_OTHERS("l")}`)
+        .bind(viewer.fid, JSON.stringify(likedHashes))
+        .all<{ post: string; fid: number; time: number }>();
+      for (const row of likeRows.results.sort((a, b) => b.time - a.time || b.fid - a.fid)) {
+        const fids = likers.get(row.post);
+        if (fids) fids.push(row.fid);
+        else likers.set(row.post, [row.fid]);
+      }
+    }
+    const names = likers.size ? await usernames(context) : new Map<number, string>();
     return {
-      items: unique.flatMap((item) =>
-        byHash.has(item.hash) ? [{ kind: item.kind, post: byHash.get(item.hash), parent: parentOf.get(item.hash) ?? null }] : [],
-      ),
+      items: unique.flatMap((item): Record<string, unknown>[] => {
+        const post = byHash.get(item.hash);
+        if (!post) return [];
+        const parent = parentOf.get(item.hash) ?? null;
+        if (item.kind !== "like") return [{ kind: item.kind, post, parent }];
+        // Deleted, or every like taken back, since the page was read.
+        const fids = likers.get(item.hash) ?? [];
+        if (post.deleted || fids.length === 0) return [];
+        const people = fids.slice(0, LIKERS).map((fid) => ({ fid, username: names.get(fid) ?? `!${fid}` }));
+        return [{ kind: item.kind, post, parent, likers: people, count: fids.length, time: item.time }];
+      }),
       next: items.results.length > PAGE ? cursorFor(page.at(-1)!) : null,
     };
   });

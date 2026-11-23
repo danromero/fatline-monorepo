@@ -45,11 +45,13 @@ enum DevProfile {
 /// One value in the device-only Keychain.
 struct KeychainValue<Value: Codable>: Sendable {
     let account: String
+    /// The app's own, unless a test names another so it never touches a real sign-in.
+    var service = Bundle.main.bundleIdentifier ?? "Fatline"
 
     private var query: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword as String,
-            kSecAttrService as String: Bundle.main.bundleIdentifier ?? "Fatline",
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account + E2EProfile.suffix + DevProfile.suffix,
             // The app gets the older file-based keychain unless it asks for this one, and only
             // this one honors device-only access.

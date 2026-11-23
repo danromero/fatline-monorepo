@@ -17,6 +17,21 @@ struct NewCastWatch {
     }
 }
 
+/// The same rule for networks: a post by someone else, a reply, or a mention in any network since the
+/// window was last in front. A network's own clock, as `NetworkModel.newestNews` reads it.
+struct NetworkNewsWatch {
+    private(set) var noticed: Int64?
+
+    mutating func showsDot(newest: Int64?, inFront: Bool) -> Bool {
+        guard let newest else { return false }
+        guard !inFront, let noticed else {
+            if noticed.map({ newest > $0 }) ?? true { noticed = newest }
+            return false
+        }
+        return newest > noticed
+    }
+}
+
 /// Opening Fatline when this account logs in to the Mac. The system keeps the answer.
 enum LoginItem {
     static var isOn: Bool { SMAppService.mainApp.status == .enabled }
@@ -40,6 +55,7 @@ final class MenuBarIcon: NSObject {
     private var item: NSStatusItem?
     private var dot: NSView?
     private var watch = NewCastWatch()
+    private var networkWatch = NetworkNewsWatch()
     private var checks: Task<Void, Never>?
     private var closer: FeedWindowCloser?
     private var started = false
@@ -112,6 +128,7 @@ final class MenuBarIcon: NSObject {
         self.item = item
         self.dot = dot
         watch = NewCastWatch()
+        networkWatch = NetworkNewsWatch()
         checks = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
@@ -140,7 +157,9 @@ final class MenuBarIcon: NSObject {
     private func update() {
         installCloser()
         guard let button = item?.button, let dot else { return }
-        var shows = watch.showsDot(newest: state?.model?.newestFromOthers, inFront: feedInFront)
+        let casts = watch.showsDot(newest: state?.model?.newestFromOthers, inFront: feedInFront)
+        let posts = networkWatch.showsDot(newest: state?.networks.newestNews, inFront: feedInFront)
+        var shows = casts || posts
         #if DEBUG
         // `-FatlineMenuBarDot YES` shows the dot without waiting for someone to post.
         if UserDefaults.standard.bool(forKey: "FatlineMenuBarDot") { shows = true }
@@ -148,7 +167,7 @@ final class MenuBarIcon: NSObject {
         let size: CGFloat = 6
         dot.frame = NSRect(x: button.bounds.midX + 5, y: button.bounds.midY - 10, width: size, height: size)
         dot.isHidden = !shows
-        button.setAccessibilityLabel(shows ? "Fatline, new casts" : "Fatline")
+        button.setAccessibilityLabel(casts ? "Fatline, new casts" : posts ? "Fatline, new posts" : "Fatline")
     }
 
     @objc private func windowsChanged() { update() }
@@ -157,6 +176,7 @@ final class MenuBarIcon: NSObject {
     private func watchFeed() {
         withObservationTracking {
             _ = state?.model?.newestFromOthers
+            _ = state?.networks.newestNews
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.update()

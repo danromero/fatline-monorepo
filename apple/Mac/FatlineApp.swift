@@ -246,6 +246,15 @@ private struct AppRoot: View {
     @Environment(AppState.self) private var state
     @Environment(\.openWindow) private var openWindow
 
+    /// Back on it starts over, which changes the account's FID: that drops the model and shows setup.
+    /// A Debug read-only feed (`-FatlineFID`) has nobody signed in, so no line and no Back.
+    private var connectionSetup: ConnectionSetup {
+        let session = state.session
+        let signedInAs: String? = session.account?.fid.map { state.username ?? String($0) }
+        let startOver: (() throws -> Void)? = session.account?.fid == nil ? nil : { try session.startOver() }
+        return ConnectionSetup(signedInAs: signedInAs, finish: session.useConnection, startOver: startOver)
+    }
+
     var body: some View {
         Group {
             if state.addingNetwork {
@@ -254,7 +263,7 @@ private struct AppRoot: View {
                 NetworkWindow(membership: network)
                     .id(network.host)
             } else if state.needsConnection, state.model != nil {
-                ConnectionSetup(finish: state.session.useConnection)
+                connectionSetup
             } else if let model = state.model {
                 FeedWindow(model: model)
                     .id(ObjectIdentifier(model))

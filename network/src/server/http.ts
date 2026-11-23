@@ -57,6 +57,8 @@ const PROBLEMS = {
   "gif-too-long": [400, "That GIF has too many frames for its size."],
   "no-hub": [400, "This network has no Farcaster hub to ask."],
   "hub-failed": [502, "Farcaster didn't answer. Check HUB_URL and HUB_API_KEY, then try again."],
+  "unknown-relay": [400, "This network doesn't send notifications through that relay."],
+  "no-push": [404, "This network has nowhere to send this device's notifications."],
 } as const satisfies Record<string, readonly [number, string]>;
 
 export type ProblemCode = keyof typeof PROBLEMS;

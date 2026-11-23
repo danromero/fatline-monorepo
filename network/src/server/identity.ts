@@ -27,10 +27,10 @@ export async function custody(env: Env, fid: number): Promise<string | null> {
 
 /**
  * Stops accepting the FID's device keys that any address but `owner` approved, with their network
- * keys, their sessions, and their admin page sign-ins (which need a live key), whether the FID is a
- * member or still waiting. Run whenever the owner is read, so a key approved on a wrong answer, or by
- * an owner since replaced, goes at once. A request still waiting takes the new owner too, so approving
- * it lets in only theirs.
+ * keys, their sessions, their notifications, and their admin page sign-ins (which need a live key),
+ * whether the FID is a member or still waiting. Run whenever the owner is read, so a key approved on
+ * a wrong answer, or by an owner since replaced, goes at once. A request still waiting takes the new
+ * owner too, so approving it lets in only theirs.
  */
 export function revokeOtherCustody(context: Context, fid: number, owner: string): D1PreparedStatement[] {
   const db = context.db;
@@ -39,6 +39,7 @@ export function revokeOtherCustody(context: Context, fid: number, owner: string)
     db.prepare(`UPDATE network_keys SET revoked = ? WHERE fid = ? AND revoked IS NULL
       AND device_key IN (SELECT key FROM device_keys WHERE fid = ? AND revoked IS NOT NULL)`).bind(context.now, fid, fid),
     db.prepare("DELETE FROM sessions WHERE fid = ? AND network_key IN (SELECT key FROM network_keys WHERE fid = ? AND revoked IS NOT NULL)").bind(fid, fid),
+    db.prepare("DELETE FROM push_targets WHERE fid = ? AND network_key IN (SELECT key FROM network_keys WHERE fid = ? AND revoked IS NOT NULL)").bind(fid, fid),
     db.prepare("UPDATE members SET custody = ?1 WHERE fid = ?2 AND custody != ?1").bind(owner, fid),
     db.prepare("UPDATE join_requests SET custody = ?1 WHERE fid = ?2 AND custody != ?1").bind(owner, fid),
   ];

@@ -270,6 +270,7 @@ Turn them back on while debugging.
 | `MINIMUM_MAC_VERSION` | Such as `0.4.0`. Older Mac builds are told to update |
 | `MEDIA_SECRET` | Signs image links. Without it, the network makes one and keeps it in its database |
 | `FNAME_URL` | Defaults to Farcaster's fname server |
+| `PUSH_RELAYS` | The relays the network sends notifications through, separated by commas. Defaults to `https://push.fatline.tech`, which passes sealed notes to Apple and can't read them. `none` turns notifications off |
 | `APPLE_APP_ID` | Optional, and only for apps whose Associated Domains name this network's domain. Their App IDs, such as `ABCDE12345.com.example.fatline`, separated by commas. The network then serves Apple's association file, so those apps open post links themselves |
 
 ## Updating

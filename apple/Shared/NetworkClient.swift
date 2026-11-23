@@ -35,6 +35,9 @@ struct NetworkMembership: Codable, Hashable, Identifiable, Sendable {
     var farcasterPicture: String?
     /// True once the network has let this account in, so a refusal after that reads as being removed.
     var wasApproved: Bool?
+    /// What this device hears from the network. Nil is the default: all posts, and for an admin, join
+    /// requests and reports.
+    var pushChoices: PushChoices?
 
     var id: String { host }
     /// Refused after being let in: the admin removed this account. Only a member has a name for the
@@ -162,17 +165,58 @@ struct NetworkInfo: Codable, Sendable {
 }
 
 struct NetworkActivity: Codable, Sendable {
-    struct Item: Codable, Hashable, Sendable {
+    /// Someone who liked your post, as the network names them.
+    struct Liker: Codable, Hashable, Sendable {
+        let fid: UInt64
+        let username: String
+    }
+
+    struct Item: Codable, Hashable, Identifiable, Sendable {
         let kind: String
         let post: NetworkPost
-        /// For a reply, the post it answers.
+        /// For a reply, the post it answers. For a like on your reply, the post your reply answers.
         var parent: NetworkPost?
+        /// For a like: up to 3 of the newest likers, newest first, how many liked the post, and when
+        /// the newest like was.
+        var likers: [Liker]?
+        var count: Int?
+        var time: Int64?
 
         /// The post whose replies this item belongs with: the answered post for a reply.
         var threadRoot: NetworkPost { parent ?? post }
+        var isLike: Bool { kind == "like" }
+        /// When it happened: the newest like for a like, or the post's own time.
+        var when: Int64 { isLike ? time ?? post.time : post.time }
+        /// A post can be in the list once as a reply or mention and once for its likes. A like's row
+        /// changes with each new like, so it's a new row then: kept, it showed the likers from before.
+        var id: String { isLike ? "like \(post.hash) \(when) \(count ?? 0)" : "\(kind) \(post.hash)" }
     }
 
     let items: [Item]
+}
+
+extension NetworkActivity.Item {
+    /// A like's own fields that can't be read are left out, so that like is dropped (`fitsLimits`)
+    /// rather than the whole of Activity.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        post = try container.decode(NetworkPost.self, forKey: .post)
+        parent = try container.decodeIfPresent(NetworkPost.self, forKey: .parent)
+        likers = try? container.decodeIfPresent([NetworkActivity.Liker].self, forKey: .likers)
+        count = try? container.decodeIfPresent(Int.self, forKey: .count)
+        time = try? container.decodeIfPresent(Int64.self, forKey: .time)
+    }
+
+    /// Within what an honest network sends. A like names 1 to 3 likers, newest first, out of a count
+    /// no smaller than that and no larger than a network's members.
+    var fitsLimits: Bool {
+        guard NetworkLimits.fits(kind, 16), post.fitsLimits, parent?.fitsLimits != false else { return false }
+        guard isLike else { return true }
+        guard let likers, let count, time != nil, (1...NetworkLimits.likers).contains(likers.count),
+              (likers.count...NetworkLimits.members).contains(count) else { return false }
+        return likers.allSatisfy { NetworkLimits.fits($0.username, NetworkLimits.usernameBytes) }
+    }
 }
 
 /// The most an honest network sends, from docs/NETWORK.md, checked as each answer arrives. A post
@@ -194,6 +238,8 @@ enum NetworkLimits {
     static let page = 100
     static let replies = 1000
     static let members = 10_000
+    /// The newest likers a like in Activity names.
+    static let likers = 3
 
     static func fits(_ text: String?, _ bytes: Int) -> Bool { (text?.utf8.count ?? 0) <= bytes }
 }
@@ -372,26 +418,65 @@ struct NetworkClient: Sendable {
 
     /// Asks to join. The Farcaster picture isn't sent: once signed in, the app uploads it itself
     /// (`setFarcasterPicture`), so the network fetches nothing.
-    static func join(host: String, device: NetworkDevice, invite: String?,
+    /// `push` is where this device hears from the network, so a waiting request hears it's in. A
+    /// network that won't use that relay turns the join down having changed nothing, so it goes again
+    /// without `push`.
+    static func join(host: String, device: NetworkDevice, invite: String?, push: PushTarget? = nil,
                      transport: @escaping Transport = { try await HTTP.loadResponse($0) }) async throws -> NetworkMembership {
+        try await joinTellingPush(host: host, device: device, invite: invite, push: push, transport: transport).membership
+    }
+
+    /// `join`, and whether the network took `push`.
+    static func joinTellingPush(host: String, device: NetworkDevice, invite: String?, push: PushTarget?,
+                                transport: @escaping Transport = { try await HTTP.loadResponse($0) }) async throws -> (membership: NetworkMembership, pushTaken: Bool) {
         let key = Curve25519.Signing.PrivateKey()
         let issued = Int64(Date.now.timeIntervalSince1970)
         let text = NetworkMessages.networkKeyText(host: host, fid: device.fid, networkKey: key.publicKey.rawRepresentation, issued: issued)
         let approval = try device.signingKey.signature(for: Data(text.utf8)).hex
         var membership = NetworkMembership(host: host, fid: device.fid, key: key.rawRepresentation, issued: issued,
                                            approval: approval, status: .pending)
-        var body: [String: Any] = [
+        var body = try joinBody(device: device, networkKey: key.publicKey.rawRepresentation, issued: issued, approval: approval)
+        if let invite { body["invite"] = invite }
+        let client = NetworkClient(membership: membership, transport: transport)
+        let (status, taken) = try await client.sendJoin(body, push: push)
+        membership.status = status
+        return (membership, taken)
+    }
+
+    /// For a request that's waiting: the join again, with the same network key and `push`, so the
+    /// network can say "You're in." once it lets you in (docs/NETWORK.md, "A join's push"). The key's
+    /// approval is signed afresh, since the network takes one made in the last few minutes. True when the
+    /// network took `push`.
+    static func addPush(_ push: PushTarget, to membership: NetworkMembership, device: NetworkDevice,
+                        transport: @escaping Transport = { try await HTTP.loadResponse($0) }) async throws -> Bool {
+        let key = try membership.signingKey.publicKey.rawRepresentation
+        let issued = Int64(Date.now.timeIntervalSince1970)
+        let text = NetworkMessages.networkKeyText(host: membership.host, fid: device.fid, networkKey: key, issued: issued)
+        let approval = try device.signingKey.signature(for: Data(text.utf8)).hex
+        let body = try joinBody(device: device, networkKey: key, issued: issued, approval: approval)
+        return try await NetworkClient(membership: membership, transport: transport).sendJoin(body, push: push).pushTaken
+    }
+
+    private static func joinBody(device: NetworkDevice, networkKey: Data, issued: Int64, approval: String) throws -> [String: Any] {
+        [
             "fid": device.fid,
             "deviceKey": try device.signingKey.publicKey.rawRepresentation.hex,
             "deviceApproval": ["issuedAt": device.issuedAt, "signature": device.signature],
-            "networkKey": key.publicKey.rawRepresentation.hex,
+            "networkKey": networkKey.hex,
             "networkApproval": ["issued": issued, "signature": approval],
         ]
-        if let invite { body["invite"] = invite }
+    }
+
+    private func sendJoin(_ body: [String: Any], push: PushTarget?) async throws -> (status: NetworkMembership.Status, pushTaken: Bool) {
         struct Answer: Decodable { let status: NetworkMembership.Status }
-        let answer: Answer = try await NetworkClient(membership: membership, transport: transport).call("POST", "join", json: body, signedIn: false)
-        membership.status = answer.status
-        return membership
+        if let push {
+            do {
+                let answer: Answer = try await call("POST", "join", json: body.merging(["push": push.joinFields]) { $1 }, signedIn: false)
+                return (answer.status, true)
+            } catch NetworkError.server(status: 400, _) {}
+        }
+        let answer: Answer = try await call("POST", "join", json: body, signedIn: false)
+        return (answer.status, false)
     }
 
     /// What a network's invite page shows for `code`, or nil when the network doesn't know the code.
@@ -475,11 +560,11 @@ struct NetworkClient: Sendable {
         return (thread.post, NetworkPost.kept(Array(replies.suffix(NetworkLimits.replies)), limit: NetworkLimits.replies))
     }
 
-    func activity() async throws -> [NetworkActivity.Item] {
-        let page: NetworkActivity = try await call("GET", "activity")
-        return page.items.prefix(NetworkLimits.page).filter { item in
-            NetworkLimits.fits(item.kind, 16) && item.post.fitsLimits && item.parent?.fitsLimits != false
-        }
+    /// Replies to you and mentions of you, newest first. With `likes`, likes on your posts and replies
+    /// too, one item a post, placed by its newest like. Only iPhone shows likes so far, so only it asks.
+    func activity(likes: Bool = false) async throws -> [NetworkActivity.Item] {
+        let page: NetworkActivity = try await call("GET", "activity", query: likes ? [URLQueryItem(name: "likes", value: "1")] : [])
+        return page.items.prefix(NetworkLimits.page).filter { $0.fitsLimits && (likes || !$0.isLike) }
     }
 
     func members() async throws -> [NetworkMember] {
@@ -547,6 +632,38 @@ struct NetworkClient: Sendable {
 
     func report(_ hash: String, note: String) async throws {
         try await expectNoContent("POST", "reports", json: ["post": hash, "note": note])
+    }
+
+    // MARK: Notifications
+
+    /// `PUT /me/push`: where and what this device hears, for the network key this session signed in with.
+    func setPush(_ target: PushTarget) async throws {
+        try await expectNoContent("PUT", "me/push", json: target.pushFields)
+    }
+
+    /// `DELETE /me/push`: this device hears nothing more from this network.
+    func removePush() async throws {
+        try await expectNoContent("DELETE", "me/push")
+    }
+
+    /// `POST /me/push/test`: a test notification to this device, sent at once, and what the relay said.
+    /// A network whose server is older than test notifications answers 404 without the `no-push` code.
+    func testPush() async throws -> PushTestAnswer {
+        if membership.token == nil { throw NetworkError.notSignedIn }
+        let (data, response) = try await send("POST", "me/push/test", token: membership.token)
+        struct Code: Decodable { let code: String? }
+        if response.statusCode == 404, (try? JSONDecoder().decode(Code.self, from: data))?.code != "no-push" {
+            throw NetworkError.server(status: 404, message: "This network can’t send test notifications yet.")
+        }
+        guard response.statusCode == 200 else { throw Self.error(status: response.statusCode, data: data) }
+        guard let answer = try? JSONDecoder().decode(PushTestAnswer.self, from: data) else { throw Self.unreadable }
+        return answer
+    }
+
+    /// `PUT /me/seen`: the newest post this member has had on screen, by its time, so twice-a-day
+    /// summaries leave out what was read, on whichever device.
+    func setSeen(_ time: Int64) async throws {
+        try await expectNoContent("PUT", "me/seen", json: ["time": time])
     }
 
     func updateProfile(displayName: String, bio: String) async throws -> NetworkMember {

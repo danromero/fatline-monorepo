@@ -17,6 +17,8 @@
     <string>$(FATLINE_DEFAULT_SERVER)</string>
     <key>FatlineBuildFeed</key>
     <string>$(FATLINE_BUILD_FEED)</string>
+    <key>FatlineAppGroup</key>
+    <string>$(FATLINE_APP_GROUP)</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>Fatline saves a picture to your library when you choose Save Image.</string>
     <key>ITSAppUsesNonExemptEncryption</key>

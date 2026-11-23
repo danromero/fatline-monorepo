@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Replies to your posts and mentions of you, the second tab, under a small centered Activity. The
-/// rows are the same as the Mac's.
+/// Replies to your posts, mentions of you, and likes on your posts, the second tab, under a small
+/// centered Activity. The rows are the same as the Mac's, which doesn't show likes yet. Likes don't
+/// add to the tab's count.
 struct NetworkActivityView: View {
     let membership: NetworkMembership
     /// True while this tab is the one showing. Reading Activity marks it seen, so it only reads then.
@@ -24,6 +25,8 @@ struct NetworkActivityView: View {
         .fatlineTitle("Activity")
         .task(id: showing) {
             guard showing else { return }
+            // Its replies and mentions come off the badge.
+            PushCenter.shared.activityOpened(membership.host)
             activity.begin(model)
             await activity.load(model, admin: membership.isAdmin)
         }

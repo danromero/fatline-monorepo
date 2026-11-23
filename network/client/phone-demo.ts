@@ -20,6 +20,8 @@
 //   http://127.0.0.1:8799/refuse                     refuses frank's request to Orchard
 //   http://127.0.0.1:8799/remove                     removes frank from Orchard, once he's in
 //   http://127.0.0.1:8799/remove?net=cabin&fid=1007  removes someone from Cabin or Pine Street, as its admin
+//   http://127.0.0.1:8799/digest                     the twice-a-day summaries now: each network's hourly job as
+//                                                    if a minute past the next 9 or 21 o'clock here; again for the next
 //
 // And to see what the app did, as another member would (carol in Cabin, quinn in Pine Street):
 //   http://127.0.0.1:8799/feed?net=pine              the feed, newest first, one line per post
@@ -33,6 +35,7 @@ import { approveDevice, Ed25519Key } from "./keys.ts";
 import { newPerson, startNetwork } from "./local.ts";
 import type { Person, TestNetwork } from "./local.ts";
 import type { Post } from "../src/protocol/api.ts";
+import { nextSlot } from "../src/server/slots.ts";
 
 const KEYS = fileURLToPath(new URL("../.demo/phone/", import.meta.url));
 // Fatline Dev's bundle ID, as Xcode builds it: FATLINE_BUNDLE_ID plus .dev. It comes from
@@ -104,6 +107,10 @@ mkdirSync(KEYS, { recursive: true });
 writeKeyFile(`${KEYS}frank.json`, keyFileFor(await approveDevice(frank.phrase, frank.fid, Ed25519Key.random())));
 writeKeyFile(`${KEYS}gina.json`, keyFileFor(await approveDevice(gina.phrase, gina.fid, Ed25519Key.random())));
 
+/** The time /digest last ran the hourly job as. Each run goes to the slot after it, since a device hears one summary a slot. */
+let digestAt = Math.floor(Date.now() / 1000);
+const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 const posters = { cabin: b, pine: q };
 const readers = { cabin: c, pine: q };
 const admins = { cabin: a, pine: p };
@@ -158,6 +165,12 @@ createServer(async (request, response) => {
         break;
       }
       case "/reports": response.end(JSON.stringify(await admins[net].reports(), null, 2) + "\n"); break;
+      case "/digest": {
+        digestAt = nextSlot(zone, digestAt) + 60;
+        for (const network of [cabin, pine, orchard]) await network.runHourly(digestAt);
+        response.end(`ran the hourly jobs as ${new Date(digestAt * 1000).toLocaleString()} (${zone})\n`);
+        break;
+      }
       default: response.statusCode = 404; response.end("unknown\n");
     }
   } catch (error) {
@@ -188,7 +201,7 @@ And to try the recovery phrase step, as heidi, whose made-up phrase is
     -FatlineProfile heidi -FatlineForgetNetworks YES
 
 Then change things with curl on http://127.0.0.1:${CONTROL}: /post?net=pine&text=Hi, /reply?text=Hi, /delete,
-/approve, /refuse, /remove. See them as another member would with /feed?net=pine, /thread?net=pine&hash=…,
+/approve, /refuse, /remove, and /digest for the twice-a-day summaries now. See them as another member would with /feed?net=pine, /thread?net=pine&hash=…,
 and /reports?net=pine. Ctrl-C stops the networks and deletes the key files.`);
 
 // Wrangler may exit on Ctrl-C before the SIGINT handler runs, so the key file also goes on exit.

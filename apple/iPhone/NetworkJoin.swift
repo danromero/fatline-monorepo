@@ -125,7 +125,13 @@ private struct NetworkJoinStep: View {
             RecoveryPhraseForm(busy: joiner.importing, error: joiner.phraseError, hasPendingRegistration: false,
                                connect: joiner.importPhrase, retry: {})
         case .result(let result):
-            NetworkJoinResultStep(result: result) { finish(result) }
+            NetworkJoinResultStep(result: result) {
+                // On Open after You're in, iOS asks, once.
+                if result.status == .approved { Task { await PushCenter.shared.ask(for: result.host) } }
+                finish(result)
+            }
+            // As Request sent appears, iOS asks, once.
+            .task { if result.status == .pending { await PushCenter.shared.ask(for: result.host) } }
         }
     }
 }

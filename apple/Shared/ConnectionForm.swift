@@ -59,11 +59,11 @@ struct WelcomeSplash: View {
     let next: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 16) { // layout-ok: the splash's mark, name and notice, unchanged since Welcome was approved
             Image("Portal")
                 .resizable()
-                .frame(width: 128, height: 128)
-                .clipShape(.rect(cornerRadius: 32))
+                .frame(width: 128, height: 128) // layout-ok: the splash's mark
+                .clipShape(.rect(cornerRadius: 32)) // layout-ok: the splash's mark, a quarter of its side
                 .accessibilityHidden(true)
             Text("Fatline")
                 .font(FatlineStyle.display)
@@ -109,19 +109,25 @@ private extension View {
 }
 
 /// For an account that signed in before there was a choice to make, and picks a connection once.
+/// Back asks to start over, which forgets the sign-in and shows Welcome, so nobody is stuck here.
 struct ConnectionSetup: View {
+    /// The saved username, or the FID. Nil when nobody is signed in (a Mac Debug read-only feed).
+    var signedInAs: String? = nil
     let finish: (ConnectionChoice) throws -> Void
+    var startOver: (() throws -> Void)? = nil
 
     @State private var path: [ConnectionKind] = []
 
     var body: some View {
         NavigationStack(path: $path) {
-            step(.neynar)
+            ConnectionForm(setup: .neynar, saved: nil, signedInAs: signedInAs, startOver: startOver,
+                           open: { path.append($0) }, finish: finish)
                 .navigationDestination(for: ConnectionKind.self, destination: step)
         }
         .tint(FatlineStyle.action)
     }
 
+    // Code and Advanced, pushed from the root, keep the system's own Back and get no line.
     private func step(_ kind: ConnectionKind) -> some View {
         ConnectionForm(setup: kind, saved: nil, open: { path.append($0) }, finish: finish)
     }
@@ -141,6 +147,9 @@ struct ConnectionForm: View {
     private let open: ((ConnectionKind) -> Void)?
     private let saved: ConnectionChoice?
     private let finish: (ConnectionChoice) throws -> Void
+    /// Only on `ConnectionSetup`'s first step: who's signed in, and what Back does once it's confirmed.
+    private let signedInAs: String?
+    private let startOver: (() throws -> Void)?
 
     @State private var kind: ConnectionKind
     @State private var code: String
@@ -149,26 +158,32 @@ struct ConnectionForm: View {
     @State private var checking = false
     @State private var error: String?
     @State private var copied = false
+    @State private var confirmingStartOver = false
+    @State private var startOverError: String?
     @FocusState private var fieldFocused: Bool
 
     init(
-        setup kind: ConnectionKind, saved: ConnectionChoice?,
+        setup kind: ConnectionKind, saved: ConnectionChoice?, signedInAs: String? = nil,
+        startOver: (() throws -> Void)? = nil,
         open: @escaping (ConnectionKind) -> Void, finish: @escaping (ConnectionChoice) throws -> Void
     ) {
-        self.init(kind: kind, saved: saved, open: open, finish: finish)
+        self.init(kind: kind, saved: saved, signedInAs: signedInAs, startOver: startOver, open: open, finish: finish)
     }
 
     init(settings saved: ConnectionChoice?, finish: @escaping (ConnectionChoice) throws -> Void) {
-        self.init(kind: saved.map(ConnectionKind.init) ?? .neynar, saved: saved, open: nil, finish: finish)
+        self.init(kind: saved.map(ConnectionKind.init) ?? .neynar, saved: saved, signedInAs: nil, startOver: nil,
+                  open: nil, finish: finish)
     }
 
     private init(
-        kind: ConnectionKind, saved: ConnectionChoice?,
+        kind: ConnectionKind, saved: ConnectionChoice?, signedInAs: String?, startOver: (() throws -> Void)?,
         open: ((ConnectionKind) -> Void)?, finish: @escaping (ConnectionChoice) throws -> Void
     ) {
         self.saved = saved
         self.open = open
         self.finish = finish
+        self.signedInAs = signedInAs
+        self.startOver = startOver
         var code = ""
         var key = ""
         var address = ""
@@ -213,15 +228,23 @@ struct ConnectionForm: View {
             VStack(alignment: .leading, spacing: 0) {
                 if inSettings {
                     Text("Connection").fatlineScreenTitle()
-                    modeSwitch.padding(.top, 16)
+                    modeSwitch.padding(.top, 16) // layout-ok: Settings' title-to-switch gap
                     Text(kind.instruction)
                         .font(FatlineStyle.body)
                         .foregroundStyle(FatlineStyle.secondary)
-                        .padding(.top, 16)
-                    entry.padding(.top, 8)
+                        .padding(.top, 16) // layout-ok: Settings' switch-to-instruction gap
+                    entry.padding(.top, FatlineStyle.itemGap)
                 } else {
                     FatlineStepHeader(title: kind.setupTitle, instruction: kind.instruction)
-                    entry.padding(.top, 20)
+                    entry.padding(.top, 20) // layout-ok: the setup steps' title-to-field gap
+                    if let signedInAs {
+                        Text("Signed in as \(Text(signedInAs).font(FatlineStyle.metaStrong).foregroundStyle(FatlineStyle.ink)) on this \(Platform.deviceName).")
+                            .font(FatlineStyle.meta)
+                            .foregroundStyle(FatlineStyle.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, FatlineStyle.sectionGap)
+                            .accessibilityIdentifier("connection-signed-in")
+                    }
                 }
             }
             .padding(.horizontal, gutter)
@@ -236,6 +259,31 @@ struct ConnectionForm: View {
         .tint(FatlineStyle.action)
         .background(FatlineStyle.paper.ignoresSafeArea())
         .fatlineStepBar()
+        .toolbar {
+            if let startOver {
+                ToolbarItem(placement: .navigation) {
+                    Button { confirmingStartOver = true } label: { Image(systemName: "chevron.left") }
+                        .help("Back")
+                        .accessibilityLabel("Back")
+                        .accessibilityIdentifier("connection-start-over")
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(checking)
+                        // On the button, so iOS anchors the dialog to Back rather than the middle of the screen.
+                        .confirmationDialog("Start over?", isPresented: $confirmingStartOver, titleVisibility: .visible) {
+                            Button("Start Over", role: .destructive) {
+                                do { try startOver() } catch { startOverError = error.localizedDescription }
+                            }
+                        } message: {
+                            Text("Fatline forgets \(signedInAs ?? "this account")’s sign-in on this \(Platform.deviceName). Your Farcaster account and casts aren’t touched.")
+                        }
+                }
+            }
+        }
+        .alert("Couldn’t start over", isPresented: Binding(get: { startOverError != nil }, set: { if !$0 { startOverError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(startOverError ?? "")
+        }
         .navigationBarBackButtonHidden(checking)
         #if os(macOS)
         // There's a keyboard on hand, so the field is ready to paste into.
@@ -256,7 +304,7 @@ struct ConnectionForm: View {
     }
 
     private var modeSwitch: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 2) { // layout-ok: the switch's 2-point inset, as the system's segmented control has
             ForEach(ConnectionKind.allCases, id: \.self) { option in
                 Button { pick(option) } label: {
                     Text(option.switchLabel)
@@ -272,7 +320,7 @@ struct ConnectionForm: View {
                 .accessibilityIdentifier(option.identifier)
             }
         }
-        .padding(2)
+        .padding(2) // layout-ok: the switch's 2-point inset
         .background(FatlineStyle.quiet, in: .capsule)
     }
 
@@ -288,7 +336,7 @@ struct ConnectionForm: View {
     }
 
     private var entry: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: FatlineStyle.itemGap) {
             field
             secondaryActions
             if let error {
@@ -338,7 +386,7 @@ struct ConnectionForm: View {
         #endif
         .padding(Self.fieldInset)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(FatlineStyle.quiet, in: .rect(cornerRadius: 18))
+        .background(FatlineStyle.quiet, in: .rect(cornerRadius: FatlineStyle.fieldRadius))
         .accessibilityIdentifier("connection-field")
     }
 
@@ -352,8 +400,8 @@ struct ConnectionForm: View {
         case .neynar:
             if let open {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { setupButtons(open) }
-                    VStack(spacing: 8) { setupButtons(open) }
+                    HStack(spacing: FatlineStyle.itemGap) { setupButtons(open) }
+                    VStack(spacing: FatlineStyle.itemGap) { setupButtons(open) }
                 }
             } else {
                 getKeyLink(fills: false)
@@ -369,8 +417,8 @@ struct ConnectionForm: View {
             }
         case .custom:
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { agentButtons }
-                VStack(spacing: 8) { agentButtons }
+                HStack(spacing: FatlineStyle.itemGap) { agentButtons }
+                VStack(spacing: FatlineStyle.itemGap) { agentButtons }
             }
         }
     }
@@ -406,7 +454,7 @@ struct ConnectionForm: View {
             Platform.announce("Copied")
             copied = true
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 4) { // layout-ok: text to symbol, as in View setup guide beside it
                 Text(copied ? "Copied" : "Copy agent prompt")
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
             }
@@ -420,7 +468,7 @@ struct ConnectionForm: View {
     }
 
     private func externalLabel(_ title: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 4) { // layout-ok: text to its arrow, tighter than a row of controls
             Text(title)
             Image(systemName: "arrow.up.right")
         }

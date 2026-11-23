@@ -1,0 +1,40 @@
+{
+  "about": "Notification notes sealed with AES-256-GCM under a device's 32-byte key, as docs/NETWORK.md describes: sealed is base64url, without padding, of the 12-byte nonce, the ciphertext, and the 16-byte tag, with no associated data. plaintext is the UTF-8 bytes sealed. The network's tests and the apps' share these.",
+  "vectors": [
+    {
+      "name": "The GCM spec's test case 13: a zero key and nonce, and nothing to seal",
+      "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "nonce": "0x000000000000000000000000",
+      "plaintext": "",
+      "sealed": "AAAAAAAAAAAAAAAAUw-K-8dFNrmpY7TxxMtziw"
+    },
+    {
+      "name": "The GCM spec's test case 14: a zero key and nonce, and 16 zero bytes",
+      "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "nonce": "0x000000000000000000000000",
+      "plaintext": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+      "sealed": "AAAAAAAAAAAAAAAAzqdAPU1ga24HTsXTuvOdGNDRyKeZmWvwJluYtdSKuRk"
+    },
+    {
+      "name": "A reply that mentions someone",
+      "key": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce": "0xa0a1a2a3a4a5a6a7a8a9aaab",
+      "plaintext": "{\"v\":1,\"kind\":\"reply\",\"fid\":1002,\"username\":\"helen\",\"text\":\"Dinner at 7? @sana\",\"pictures\":0,\"post\":\"0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"thread\":\"0xabababababababababababababababababababab\"}",
+      "sealed": "oKGio6SlpqeoqaqrnToKD3_6Lp0JDOm3JUDirBXcNWmwm2AK9WoEvE6bRTP-VDKMylA9XDL5JvIrEuaVInVkZECkfwY1fDF84Bnr3tHOpQ5EhdPf1KKMeeGv7pbve8LHsbTrH51XBKqduD37_PAJkSGe9_j6uGIz4euJS0AzBc26Vv9fS6y6x9A2li6hctQctyHkdFM6muh2KfX0pPvZA8y1m-jf95_F16ZWSqR5fdDUCyJ34GtJQw2z1IAVR5_5YAfMX-DjFFg-4302VlcuqALzxiIMzLqTKZu-bdkbgUnTxRY"
+    },
+    {
+      "name": "A new post, the third this hour, with text beyond ASCII",
+      "key": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce": "0xb0b1b2b3b4b5b6b7b8b9babb",
+      "plaintext": "{\"v\":1,\"kind\":\"post\",\"fid\":1004,\"username\":\"mika\",\"text\":\"Café opens at 8 ☕️ 👍🏽\\nSee you there\",\"pictures\":1,\"post\":\"0xabababababababababababababababababababab\",\"thread\":\"0xabababababababababababababababababababab\",\"count\":3,\"usernames\":[\"mika\",\"sana\",\"dave\"]}",
+      "sealed": "sLGys7S1tre4ubq74ncsidb8l30skfnG72eqsutPPfA5DOlcOuy4wGyyxjonPlBfEbDH1cB5mmhR0OnUD0E1s35DNtJ3qC9RYliJ392YW9p5nAeuOeSCvAaTDYnJsDktOfWFQnpGJP54PGqfGs8Le7q_U2Q7bDb-4rOj9HjE0uRRyfwWWneYqmosFQB51cbsYmzyTAM3bERNfVB54t8lsqoBIn_Qk0K_KKOd9pOwoJ5eBTRTkXlhnm8wg8NXMXSTpsxxxDRxKuPh4eg8PLXFkpRlJelJVg27ZgJM96tL5xI_VEymMlQh96JXiH5YLKsU_4RgEBEvtWGDNOkt5aQgasNKdJ2L2z9v_NRnbjUMIX7NNgPlIyq1Npn7DP88FGv7rydtEo8yajZr_e4"
+    },
+    {
+      "name": "You're in",
+      "key": "0x404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "nonce": "0xc0c1c2c3c4c5c6c7c8c9cacb",
+      "plaintext": "{\"v\":1,\"kind\":\"approved\",\"fid\":1005,\"username\":\"!1005\",\"text\":\"\",\"pictures\":0,\"post\":null,\"thread\":null}",
+      "sealed": "wMHCw8TFxsfIycrLJGZG7ECrEckf0EpSiZmArO-FLD6oS0oq0JFVBUxYQHe0Bmar09Nl2ZheE38uH34RTLV4BTReDWrD1gcFyzLDcyOOrzzzIANSxXrGRKQP4FSx7OWNpUNePguv-FAXrJ9gjZHjwmIdS_u6UwuWGDeEd0BjgMnDlqgO"
+    }
+  ]
+}

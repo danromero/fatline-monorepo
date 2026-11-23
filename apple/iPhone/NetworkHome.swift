@@ -7,12 +7,13 @@ import UIKit
 
 /// Where a network's feed or Activity has gone from its first screen.
 enum NetworkRoute: Hashable {
-    case thread(NetworkPost)
+    /// A post and its replies. `lit` is a reply a notification was about, lit for a moment.
+    case thread(NetworkPost, lit: String? = nil)
 }
 
 /// Where Settings has gone.
 enum NetworkSettingsRoute: Hashable {
-    case profile, members, debug, checks, log
+    case profile, notifications, members, debug, checks, log, pushTest
 }
 
 /// A network's screens, or where it stands while the admin decides.
@@ -22,6 +23,7 @@ struct NetworkHome: View {
     let addNetwork: () -> Void
 
     @Environment(NetworkModel.self) private var model
+    @Environment(\.openURL) private var openURL
     @State private var tab = FatlineTab.home
     @State private var path: [NetworkRoute] = []
     @State private var activityPath: [NetworkRoute] = []
@@ -31,6 +33,8 @@ struct NetworkHome: View {
     @Namespace private var composeZoom
 
     private var approved: Bool { membership.status == .approved }
+    /// The feed, or a post opened from it, is the screen in front, for twice-a-day summaries' "read".
+    private var feedInFront: Bool { approved && tab == .home && !showingSettings && !composing }
 
     private func openLinkedPost() async {
         guard approved, let link = model.linkedPost(in: membership.host) else { return }
@@ -47,6 +51,46 @@ struct NetworkHome: View {
             model.linkedPostOpened(link)
             model.toast = "That post isn’t here."
         }
+    }
+
+    /// What a notification's screen waits on: the network letting you in, for "You're in."
+    private struct NotificationKey: Hashable {
+        let opening: NetworkModel.NotificationOpening?
+        let approved: Bool
+    }
+
+    /// A tapped notification's screen: a post with a reply lit, the feed, Activity, or the admin pages.
+    private func openNotification() async {
+        guard let opening = model.notificationOpening(in: membership.host) else { return }
+        // A waiting request shows where it stands until the network lets you in.
+        guard approved else {
+            if opening.target == .feed { model.notificationOpened(opening) }
+            return
+        }
+        showingSettings = false
+        composing = false
+        switch opening.target {
+        case .thread(let hash, let lit):
+            do {
+                let post = try await model.thread(hash).post
+                tab = .home
+                path = [.thread(post, lit: lit)]
+            } catch is CancellationError {
+                return
+            } catch {
+                model.toast = "That post isn’t here."
+            }
+        case .feed:
+            tab = .home
+            path = []
+        case .activity:
+            tab = .activity
+            activityPath = []
+        case .manage:
+            tab = .home
+            if membership.isAdmin, let link = try? await model.adminLink() { openURL(link) }
+        }
+        model.notificationOpened(opening)
     }
 
     var body: some View {
@@ -82,8 +126,12 @@ struct NetworkHome: View {
             .animation(.snappy(duration: 0.2), value: showsCompose)
         }
         .sheet(isPresented: $showingSettings) { settings }
+        .onChange(of: feedInFront, initial: true) { _, inFront in model.feedShows(membership.host, inFront) }
+        .onDisappear { model.feedShows(membership.host, false) }
         // A post link opens its thread on Home, once this network has let you in.
         .task(id: approved ? model.linkedPost : nil) { await openLinkedPost() }
+        // A tapped notification opens its screen here.
+        .task(id: NotificationKey(opening: model.notificationOpening(in: membership.host), approved: approved)) { await openNotification() }
         // This view lasts as long as its network shows, so the composer posts to the one it opened on.
         .sheet(isPresented: $composing) {
             NetworkComposer(host: membership.host)
@@ -103,6 +151,8 @@ struct NetworkHome: View {
                         Platform.haptic(.tap)
                         Task { await model.checkAgain(membership.host) }
                     }
+                    // Request sent: iOS asks, once, so this request hears "You're in."
+                    .task { await PushCenter.shared.ask(for: membership.host) }
                 case .refused:
                     NetworkStatusView(status: .refused, host: membership.host, removed: membership.removed, button: "Remove from This iPhone") {
                         model.forget(membership.host)
@@ -117,12 +167,11 @@ struct NetworkHome: View {
             .toolbar { bar }
             .navigationDestination(for: NetworkRoute.self) { route in
                 switch route {
-                case .thread(let post):
-                    // A post has its reply bar where the tab bar was.
-                    NetworkThreadView(post: post).toolbar(.hidden, for: .tabBar)
+                case .thread(let post, let lit): NetworkThreadView(post: post, lit: lit).tabBar(showingPost: true)
                 }
             }
         }
+        .tabBar(showingPost: !path.isEmpty)
     }
 
     private var activity: some View {
@@ -131,10 +180,11 @@ struct NetworkHome: View {
                 .toolbar { bar }
                 .navigationDestination(for: NetworkRoute.self) { route in
                     switch route {
-                    case .thread(let post): NetworkThreadView(post: post).toolbar(.hidden, for: .tabBar)
+                    case .thread(let post, let lit): NetworkThreadView(post: post, lit: lit).tabBar(showingPost: true)
                     }
                 }
         }
+        .tabBar(showingPost: !activityPath.isEmpty)
     }
 
     /// Settings, from the network menu, as a sheet with its own navigation.
@@ -146,12 +196,18 @@ struct NetworkHome: View {
             .navigationDestination(for: NetworkSettingsRoute.self) { route in
                 switch route {
                 case .profile: NetworkProfileView()
+                case .notifications: NetworkNotificationsView(membership: membership)
                 case .members: NetworkMembersView()
                 case .debug:
-                    DebugView(scope: membership.host, forgetNetworks: { model.forgetEverything() }) { next in
-                        settingsPath.append(next == .checks ? .checks : .log)
+                    DebugView(scope: membership.host, testsNotifications: true, forgetNetworks: { model.forgetEverything() }) { next in
+                        switch next {
+                        case .checks: settingsPath.append(.checks)
+                        case .log: settingsPath.append(.log)
+                        case .pushTest: settingsPath.append(.pushTest)
+                        }
                     }
                 case .checks: ChecksView(.network(host: membership.host, model: model))
+                case .pushTest: PushTestView(host: membership.host, model: model)
                 case .log: LaunchLogView(place: membership.title, scope: membership.host)
                 }
             }
@@ -264,6 +320,8 @@ struct NetworkPostRow: View {
 
     let post: NetworkPost
     var place = Place.feed
+    /// The reply a notification was about, lit for a moment with the menu's background.
+    var lit = false
     /// Opens the post's replies, from the feed.
     var open: (() -> Void)? = nil
     /// What Reply does in a thread: goes to the reply field. From the feed, Reply opens the replies.
@@ -299,7 +357,7 @@ struct NetworkPostRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CastRow(cast: model.cast(for: post), handle: model.handle(for: post.fid), bottomInset: 0, replyingTo: replyingTo)
+            CastRow(cast: model.cast(for: post), handle: model.handle(for: post.fid), bottomInset: 0, highlighted: lit, replyingTo: replyingTo)
             ForEach(model.linkCards(for: post)) { card in
                 NetworkLinkCard(card: card)
                     .padding(.leading, FatlineStyle.textColumn)
@@ -308,7 +366,7 @@ struct NetworkPostRow: View {
             }
             actions
         }
-        .background(FatlineStyle.paper)
+        .background(lit ? FatlineStyle.quiet : FatlineStyle.paper)
         .opacity(deleting ? 0.4 : 1)
         .contentShape(.rect)
         .onTapGesture { open?() }
@@ -468,8 +526,13 @@ struct NetworkPostRow: View {
 /// post deleted since it was opened shows a placeholder, and its replies stay under it with no bar.
 struct NetworkThreadView: View {
     let post: NetworkPost
+    /// A reply a notification was about, lit when it first shows, then fading to paper.
+    var lit: String? = nil
 
     @Environment(NetworkModel.self) private var model
+    /// The reply lit now, and whether it has been, so a later read doesn't light it again.
+    @State private var litShown: String?
+    @State private var litDone = false
     @State private var root: NetworkPost?
     @State private var replies: [NetworkPost] = []
     @State private var loaded = false
@@ -477,13 +540,24 @@ struct NetworkThreadView: View {
     @State private var reply = ""
     @State private var sending = false
     @State private var sendFailure: String?
+    /// The reply just sent, under the others from the moment Post is tapped until the network's copy
+    /// replaces it.
+    @State private var sent: NetworkPost?
     /// The network this thread is on, which a reply goes to whatever is showing later.
     @State private var host: String?
     @FocusState private var replyFocused: Bool
+    /// The bottom took room while the thread was at its end, so it's going back there.
+    @State private var keepingEnd = false
 
     /// The post whose replies these are. Opened from a reply in the feed, it's the post that reply
     /// answers, which shows once it's read.
     private var shown: NetworkPost? { root ?? (post.parent == nil ? post : nil) }
+    private var listed: [NetworkPost] {
+        guard let sent, !replies.contains(where: { $0.hash == sent.hash }) else { return replies }
+        return replies + [sent]
+    }
+    private static let end = "end"
+
     private var canSend: Bool {
         !sending && host != nil && !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && NetworkMessages.characterCount(reply) <= NetworkMessages.maxCharacters
@@ -504,24 +578,47 @@ struct NetworkThreadView: View {
                         }
                         if let failure {
                             FeedMessage(text: failure, color: FatlineStyle.danger)
-                        } else if loaded && replies.isEmpty {
+                        } else if loaded && listed.isEmpty {
                             FeedMessage(text: "No replies yet")
                         }
-                        ForEach(replies) { item in
-                            NetworkPostRow(post: item, place: .reply, reply: { replyFocused = true }, liked: load)
+                        ForEach(listed) { item in
+                            NetworkPostRow(post: item, place: .reply, lit: item.hash == litShown, reply: { replyFocused = true }, liked: load)
+                                // Not liked or deleted until the network has it.
+                                .allowsHitTesting(item.hash != sent?.hash)
                                 .id(item.id)
-                            if item.id != replies.last?.id { CastDivider() }
+                            if item.id != listed.last?.id { CastDivider() }
                         }
+                        // The thread's end, for keeping it in view.
+                        Color.clear.frame(height: 0).id(Self.end)
                     }
+                }
+                // The keyboard, a send error, or a longer reply takes room from the bottom. If the thread was at
+                // its end, it goes back there, so the last reply isn't left under the bar; scrolled up to read, it
+                // stays where it was. The keyboard shrinks the view a moment before it adds its inset, so this
+                // keeps going to the end until the thread is there again.
+                .onScrollGeometryChange(for: ThreadViewport.self, of: ThreadViewport.init) { old, new in
+                    // Replies loading change the content, not the room, so they don't count.
+                    if new.contentHeight != old.contentHeight {
+                        keepingEnd = false
+                    } else if new.height < old.height, old.atEnd {
+                        keepingEnd = true
+                    }
+                    if new.height > old.height || new.atEnd { keepingEnd = false }
+                    guard keepingEnd else { return }
+                    withAnimation(Platform.reduceMotion ? nil : .default) { scroller.scrollTo(Self.end, anchor: .bottom) }
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await load() }
                 .overlay(alignment: .bottom) {
                     NetworkToastHost().padding(.bottom, FatlineStyle.groupGap)
                 }
-                .onChange(of: replies.last?.id) { _, last in
-                    guard let last else { return }
+                .onChange(of: listed.last?.id) { _, last in
+                    guard let last, litShown == nil else { return }
                     withAnimation(Platform.reduceMotion ? nil : .default) { scroller.scrollTo(last, anchor: .bottom) }
+                }
+                .onChange(of: litShown) { _, lit in
+                    guard let lit, let item = replies.first(where: { $0.hash == lit }) else { return }
+                    scroller.scrollTo(item.id, anchor: .center)
                 }
             }
         }
@@ -534,7 +631,11 @@ struct NetworkThreadView: View {
         .task {
             if host == nil { host = model.selectedHost }
             await load()
+            await light()
         }
+        // Its notifications don't show while it's open.
+        .onAppear { if let host = host ?? model.selectedHost { model.threadOnScreen = (host, post.parent ?? post.hash) } }
+        .onDisappear { if model.threadOnScreen?.hash == post.parent ?? post.hash { model.threadOnScreen = nil } }
         // The feed reads each minute, and its posts changing means this thread may have too.
         .onChange(of: model.posts) { Task { await load() } }
     }
@@ -542,27 +643,41 @@ struct NetworkThreadView: View {
     /// A round field and a Post pill on the gutter, riding the keyboard. It stops growing where the pill
     /// would crowd out the field, as the composer's header does.
     private var replyBar: some View {
-        NetworkReplyBar(text: $reply, focused: $replyFocused, sending: sending, canSend: canSend, failure: sendFailure, send: send)
+        NetworkReplyBar(text: $reply, focused: $replyFocused, canSend: canSend, failure: sendFailure, send: send)
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
+    /// The field empties and the reply shows under the others at once, then goes. If it doesn't go, it
+    /// comes off the list and its text goes back in the field.
     private func send() {
         guard canSend, let host, let shown else { return }
-        Platform.haptic(.tap)
+        let text = reply
+        Platform.haptic(.done)
         sending = true
         sendFailure = nil
+        reply = ""
         Task {
             do {
-                try await model.post(to: host, text: reply, parent: shown)
-                Platform.haptic(.done)
-                reply = ""
+                try await model.post(to: host, text: text, parent: shown) { sent = $0 }
+                sending = false
                 await load()
             } catch {
                 Platform.haptic(.problem)
+                sent = nil
+                sending = false
                 sendFailure = error.localizedDescription
+                if reply.isEmpty { reply = text }
             }
-            sending = false
         }
+    }
+
+    /// The reply a notification was about: lit with the menu's background, then back to paper.
+    private func light() async {
+        guard let lit, !litDone, replies.contains(where: { $0.hash == lit }) else { return }
+        litDone = true
+        litShown = lit
+        try? await Task.sleep(for: .seconds(1.5))
+        withAnimation(.easeOut(duration: 1)) { litShown = nil }
     }
 
     private func load() async {
@@ -570,6 +685,7 @@ struct NetworkThreadView: View {
             let thread = try await model.thread(post.parent ?? post.hash)
             root = thread.post
             replies = thread.replies
+            if replies.contains(where: { $0.hash == sent?.hash }) { sent = nil }
             failure = nil
         } catch is CancellationError {
             return
@@ -580,11 +696,30 @@ struct NetworkThreadView: View {
     }
 }
 
+/// How much of a thread shows above the reply bar and keyboard, and whether that reaches its end.
+private struct ThreadViewport: Equatable {
+    let height: CGFloat
+    let atEnd: Bool
+    /// The room the reply bar and keyboard take, so a change to it alone is seen too.
+    let inset: CGFloat
+    let contentHeight: CGFloat
+
+    init(_ geometry: ScrollGeometry) {
+        // The container's size leaves out the insets (the title bar, the reply bar, the keyboard), and the
+        // offset counts from under the title bar.
+        height = geometry.containerSize.height
+        inset = geometry.contentInsets.bottom
+        contentHeight = geometry.contentSize.height
+        let shownTo = geometry.contentOffset.y + geometry.contentInsets.top + geometry.containerSize.height
+        // Within a small gap of the end counts, for rounding as the bar and keyboard move.
+        atEnd = shownTo >= geometry.contentSize.height - FatlineStyle.itemGap
+    }
+}
+
 /// The bar under a thread. The pill stays on the last line as the field grows.
 private struct NetworkReplyBar: View {
     @Binding var text: String
     var focused: FocusState<Bool>.Binding
-    let sending: Bool
     let canSend: Bool
     let failure: String?
     let send: () -> Void
@@ -613,8 +748,9 @@ private struct NetworkReplyBar: View {
                     .padding(.vertical, FatlineStyle.itemGap)
                     .frame(minHeight: fieldHeight)
                     .background(FatlineStyle.quiet, in: .rect(cornerRadius: fieldHeight / 2, style: .continuous))
-                Button(sending ? "Posting…" : "Post", action: send)
-                    .buttonStyle(FatlinePrimaryButton(minWidth: FatlineStyle.postPillWidth, isWorking: sending))
+                // It stays Post: the reply shows in the thread as it goes.
+                Button("Post", action: send)
+                    .buttonStyle(FatlinePrimaryButton(minWidth: FatlineStyle.postPillWidth))
                     .disabled(!canSend)
                     .accessibilityIdentifier("network-reply-post")
             }
@@ -640,5 +776,14 @@ private struct NetworkDeletedRow: View {
         }
         .padding(.horizontal, FatlineStyle.gutter)
         .padding(.vertical, FatlineStyle.rowPadding)
+    }
+}
+
+private extension View {
+    /// A post has its reply bar where the tab bar was. The post hides the bar, so it's gone as the post
+    /// slides in. The tab's stack shows it again as soon as Back empties the stack, so it comes in with the
+    /// feed and Compose; left to the post alone, it came back a beat after the post had gone.
+    func tabBar(showingPost: Bool) -> some View {
+        toolbar(showingPost ? .hidden : .visible, for: .tabBar)
     }
 }

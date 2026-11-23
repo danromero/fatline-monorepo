@@ -4,6 +4,7 @@ import type { Context, Viewer } from "./env.ts";
 import { badRequest, decodePart, field, HttpError, json, noContent, notFound, problem, readJSON, TEXT } from "./http.ts";
 import { iconLink } from "./icon.ts";
 import { collect, mediaLinks, ownUpload } from "./media.ts";
+import { notifyReport } from "./push.ts";
 import { memberJSON, memberRow, settings } from "./store.ts";
 import type { MemberRow } from "./store.ts";
 
@@ -94,12 +95,13 @@ export async function report(context: Context, viewer: Viewer, request: Request)
   const post = field.hex(body, "post", 20);
   const note = field.text(body, "note", TEXT.note) ?? "";
   await checkDaily(context, viewer.fid, "reports", "That's 20 reports today. The admin will see the ones you sent.");
-  const row = await context.db.prepare("SELECT fid FROM posts WHERE hash = ? AND deleted IS NULL").bind(post).first<{ fid: number }>();
+  const row = await context.db.prepare("SELECT fid, parent FROM posts WHERE hash = ? AND deleted IS NULL").bind(post).first<{ fid: number; parent: string | null }>();
   if (!row) throw notFound("That post isn't here.");
   await context.db.batch([
     context.db.prepare("INSERT INTO reports (post, post_fid, fid, note, created) VALUES (?, ?, ?, ?, ?)").bind(post, row.fid, viewer.fid, note.trim(), context.now),
     countDaily(context, viewer.fid, "reports"),
   ]);
+  notifyReport(context, { fid: viewer.fid, post, thread: row.parent ?? post, note: note.trim() });
   return noContent();
 }
 

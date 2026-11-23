@@ -8,6 +8,7 @@ import { logStatement, memberRow } from "./store.ts";
 import { copyAvatar } from "./media.ts";
 import { checkDaily, countDaily, DAILY, today } from "./daily.ts";
 import { admittedByFollow } from "./follows.ts";
+import { notifyApproved, notifyRequest, pushFields, targetStatements } from "./push.ts";
 
 const APPROVAL_WINDOW = 10 * 60;
 const SESSION_WINDOW = 5 * 60;
@@ -43,6 +44,8 @@ export async function join(context: Context, request: Request) {
   const invite = field.optionalString(body, "invite", 128);
   if (invite !== undefined && !CODE.test(invite)) throw badRequest("That isn't an invite code.");
   const avatar = field.optionalString(body, "avatar", 1024);
+  // Where this device hears from the network, which a waiting request has no other way to say.
+  const push = body.push === undefined || body.push === null ? undefined : pushFields(context.env, field.object(body, "push"));
 
   if (Math.abs(context.now - issued) > APPROVAL_WINDOW) throw new HttpError(401, "Your device's clock is off. Check the time and try again.");
   if (!networkApprovalIsValid(context.host, fid, fromHex(deviceKey)!, fromHex(networkKey)!, { issued, signature: networkSignature })) {
@@ -107,8 +110,11 @@ export async function join(context: Context, request: Request) {
     // The oldest past the newest MAX_NETWORK_KEYS go, with their sessions, so no one can add rows without end.
     context.db.prepare(`DELETE FROM sessions WHERE network_key IN (SELECT key FROM network_keys WHERE fid = ? ORDER BY rowid DESC LIMIT -1 OFFSET ?)`)
       .bind(fid, MAX_NETWORK_KEYS),
+    context.db.prepare(`DELETE FROM push_targets WHERE network_key IN (SELECT key FROM network_keys WHERE fid = ? ORDER BY rowid DESC LIMIT -1 OFFSET ?)`)
+      .bind(fid, MAX_NETWORK_KEYS),
     context.db.prepare(`DELETE FROM network_keys WHERE rowid IN (SELECT rowid FROM network_keys WHERE fid = ? ORDER BY rowid DESC LIMIT -1 OFFSET ?)`)
       .bind(fid, MAX_NETWORK_KEYS),
+    ...(push ? targetStatements(context, fid, networkKey, push) : []),
   ];
 
   // Anyone can call this, so the account's own day counts it, now that its key is shown to be its own.
@@ -147,6 +153,7 @@ async function admit(
       .prepare("INSERT INTO join_requests (fid, username, avatar, custody, requested, status) VALUES (?, ?, ?, ?, ?, 'pending')")
       .bind(fid, name, avatar ?? null, custodyAddress, context.now)
       .run();
+    notifyRequest(context, fid, name);
   }
   return "pending";
 }
@@ -255,6 +262,7 @@ export async function session(context: Context, request: Request) {
     // Someone on a follow list pulled after they asked gets in the next time their app checks.
     if (!(await admittedByFollow(context, fid))) return json({ status: "pending" }, 202);
     await addMember(context, fid, request.custody, 0, request.avatar, "member", [logStatement(context, context.adminFid, "approved by following", { fid })]);
+    notifyApproved(context, fid);
   }
 
   const token = base64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -272,10 +280,15 @@ function bearer(request: Request) {
   return /^Bearer ([A-Za-z0-9_-]{20,100})$/.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
 
-/** DELETE /session. Ends the token the request carries. The device's keys stay, so it can sign in again. */
-export async function endSession(context: Context, request: Request) {
+/**
+ * DELETE /session. Ends the token the request carries, and the device stops hearing from the network.
+ * Its keys stay, so it can sign in again.
+ */
+export async function endSession(context: Context, request: Request, viewer: Viewer) {
   const token = bearer(request);
-  if (token) await context.db.prepare("DELETE FROM sessions WHERE token = ?").bind(await sha256Hex(token)).run();
+  const statements = [context.db.prepare("DELETE FROM push_targets WHERE network_key = ?").bind(viewer.networkKey)];
+  if (token) statements.push(context.db.prepare("DELETE FROM sessions WHERE token = ?").bind(await sha256Hex(token)));
+  await context.db.batch(statements);
   return noContent();
 }
 

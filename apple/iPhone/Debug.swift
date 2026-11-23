@@ -6,7 +6,7 @@ import SwiftUI
 
 /// Where Debug goes.
 enum DebugRoute: Hashable {
-    case checks, log
+    case checks, log, pushTest
 }
 
 /// The Debug row at the bottom of Settings, in a group of its own, with the build under it.
@@ -36,6 +36,8 @@ struct DebugSettingsEntry: View {
 struct DebugView: View {
     /// The Launch Log's scope: the network's host, or `LaunchLog.farcaster`.
     let scope: String
+    /// A network's Debug offers Send Test Notification; Farcaster's has no notifications.
+    var testsNotifications = false
     /// Debug builds only: forgets every network on this iPhone, for testing.
     var forgetNetworks: (() -> Void)? = nil
     let open: (DebugRoute) -> Void
@@ -54,8 +56,16 @@ struct DebugView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("debug-launch-log")
+                if testsNotifications {
+                    TextColumnDivider()
+                    Button { open(.pushTest) } label: { SettingsRow(symbol: "bell.badge", title: "Send Test Notification") }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("debug-test-notification")
+                }
                 CastDivider()
-                Text("Checks only read. A report leaves out keys, tokens, post text, drafts, and your recovery phrase.")
+                Text(testsNotifications
+                     ? "Checks only read. A test notification goes to this iPhone alone. A report leaves out keys, tokens, post text, drafts, and your recovery phrase."
+                     : "Checks only read. A report leaves out keys, tokens, post text, drafts, and your recovery phrase.")
                     .font(FatlineStyle.meta)
                     .foregroundStyle(FatlineStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -219,6 +229,66 @@ struct ChecksView: View {
         Platform.haptic(.tap)
         Platform.announce("Report copied")
         copied = true
+    }
+}
+
+/// Send Test Notification: sends as soon as it opens, then shows each step a notification takes, as
+/// Run Checks shows its checks. The notification's own banner shows over it when it arrives.
+struct PushTestView: View {
+    @State private var run: PushTestRun
+
+    init(host: String, model: NetworkModel) {
+        _run = State(initialValue: PushTestRun(host: host, model: model))
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                summary
+                CastDivider()
+                ForEach(Array(run.checks.enumerated()), id: \.element.id) { offset, check in
+                    if offset > 0 { TextColumnDivider() }
+                    CheckRow(check: check, title: check.title)
+                }
+                CastDivider()
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .foregroundStyle(FatlineStyle.ink)
+        .background(FatlineStyle.paper.ignoresSafeArea())
+        .fatlineTitle("Test Notification")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if run.running {
+                    Button("Stop") { run.stop() }
+                        .accessibilityIdentifier("test-notification-stop")
+                } else {
+                    Button { run.start() } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("Send Again")
+                        .accessibilityIdentifier("test-notification-again")
+                }
+            }
+        }
+        .task { run.start() }
+        .onDisappear { run.stop() }
+    }
+
+    private var summary: some View {
+        let finished = run.finished && !run.running
+        let problem = run.problem
+        let title = !finished ? "Sending a test notification…" : problem == nil ? "It arrived" : "It didn’t arrive"
+        let detail = !finished ? "\(run.done) of \(run.checks.count)" : problem.map { "Stopped at \($0.title)" } ?? "Notifications from \(run.place) reach this iPhone"
+        return HStack(alignment: .firstTextBaseline, spacing: FatlineStyle.avatarGap) {
+            CheckGlyph(kind: finished ? (problem == nil ? .passed : .failed) : .running)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).font(FatlineStyle.bodyStrong)
+                Text(verbatim: detail).font(FatlineStyle.meta).foregroundStyle(FatlineStyle.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, FatlineStyle.gutter)
+        .padding(.vertical, FatlineStyle.rowPadding)
+        .accessibilityElement(children: .combine)
     }
 }
 

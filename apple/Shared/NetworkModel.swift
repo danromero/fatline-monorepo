@@ -9,6 +9,7 @@ final class NetworkModel {
     private static let selectedKey = "selectedNetwork" + DevProfile.suffix
     private static let seenPostsKey = "networkSeenPosts" + DevProfile.suffix
     private static let seenActivityKey = "networkSeenActivity" + DevProfile.suffix
+    private static let seenLikesKey = "networkSeenLikes" + DevProfile.suffix
     static let pollInterval: TimeInterval = 60
     /// How often a poll also reads members and the network's name and icon.
     static let slowPollInterval: TimeInterval = 10 * 60
@@ -72,6 +73,10 @@ final class NetworkModel {
     /// How many replies and mentions in each network came after the newest Activity showed, for the
     /// count on iPhone's Activity tab. Known only after a read of Activity's list.
     private var unseenActivity: [String: Int] = [:]
+    /// The newest like Activity has shown, on iPhone. Likes have a seen time of their own, so a like
+    /// newer than every reply doesn't hide a reply's New, nor a reply a like's. They never reach the
+    /// dot or the count on the tab: only Activity's own read asks for them (`activity()`).
+    private var seenLikes: [String: Int64] = UserDefaults.standard.dictionary(forKey: seenLikesKey) as? [String: Int64] ?? [:]
 
     init() {
         #if DEBUG
@@ -80,6 +85,7 @@ final class NetworkModel {
             Self.forgetAll()
             seenPosts = [:]
             seenActivity = [:]
+            seenLikes = [:]
         }
         #endif
         device = try? NetworkKeychain.device.load()
@@ -154,8 +160,18 @@ final class NetworkModel {
     /// Whether any network other than the one showing has something new.
     var othersHaveNews: Bool { memberships.contains { $0.status == .approved && hasNews($0.host) } }
 
+    /// The newest post by someone else, reply, or mention read in any network you're in, the one showing
+    /// included, for the Mac's menu bar dot. Nil before any has been read.
+    var newestNews: Int64? {
+        memberships.filter { $0.status == .approved }
+            .flatMap { [newestPost[$0.host], newestActivity[$0.host]] }
+            .compactMap { $0 }.filter { $0 > 0 }.max()
+    }
+
     /// The newest reply or mention Activity has shown for the selected network. Anything after it is new.
     var activitySeen: Int64? { selectedHost.flatMap { seenActivity[$0] } }
+    /// The newest like Activity has shown for the selected network, by when it was liked. Likes after it are new.
+    var likesSeen: Int64? { selectedHost.flatMap { seenLikes[$0] } }
 
     func markActivitySeen() {
         guard let host = selectedHost, let newest = newestActivity[host] else { return }
@@ -171,6 +187,7 @@ final class NetworkModel {
         self.newestPost[host] = newestPost
         if host == selectedHost || seenPosts[host] == nil { seenPosts[host] = max(newestPost, posts.first?.time ?? 0) }
         UserDefaults.standard.set(seenPosts, forKey: Self.seenPostsKey)
+        if host == selectedHost, feedOnScreen { feedRead(host, upTo: max(newestPost, posts.first?.time ?? 0)) }
         guard let activity else { return }
         let newestActivity = activity.first?.post.time ?? 0
         self.newestActivity[host] = newestActivity
@@ -178,6 +195,54 @@ final class NetworkModel {
         let seen = seenActivity[host] ?? .max
         unseenActivity[host] = activity.filter { $0.post.time > seen }.count
         UserDefaults.standard.set(seenActivity, forKey: Self.seenActivityKey)
+    }
+
+    // MARK: Read, for twice-a-day summaries
+
+    /// iPhone: the app is active with nothing over it, such as Add Network.
+    @ObservationIgnored var appInFront = false {
+        didSet { if appInFront != oldValue { feedMayHaveCome() } }
+    }
+    /// iPhone: the network whose feed is the screen in front: Home, or a post opened from it, with no
+    /// Settings or composer over it. The Mac doesn't set it yet, since its poll also runs with the window
+    /// behind others (design/push-digest-plan.md, Phase 4).
+    @ObservationIgnored private var feedShowing: String? {
+        didSet { if feedShowing != oldValue { feedMayHaveCome() } }
+    }
+    /// Only while the selected network's feed is on screen does reading it count as read for twice-a-day
+    /// summaries, and clear its new-post notifications.
+    private var feedOnScreen: Bool { appInFront && feedShowing != nil && feedShowing == selectedHost }
+    /// Called with the network whose feed was on screen, so its new-post notifications can go.
+    @ObservationIgnored var postsRead: ((String) -> Void)?
+    @ObservationIgnored private var seenReports = SeenReports()
+
+    /// A network's screen says whether its feed is the one in front. One going away only clears its own,
+    /// so the next network's coming in first doesn't get undone.
+    func feedShows(_ host: String, _ showing: Bool) {
+        if showing { feedShowing = host } else if feedShowing == host { feedShowing = nil }
+    }
+
+    /// Coming back to a feed, from Activity or Settings or the app coming forward, reads what it shows.
+    private func feedMayHaveCome() {
+        guard feedOnScreen, let host = selectedHost, let newest = posts.first?.time else { return }
+        feedRead(host, upTo: newest)
+    }
+
+    private func feedRead(_ host: String, upTo time: Int64) {
+        seenReports.show(host, upTo: time)
+        if let due = seenReports.due(host) { tellSeen(host, due) }
+        postsRead?(host)
+    }
+
+    /// On going to the background: every network told what its feed showed, without waiting out the minute.
+    func reportSeenNow() {
+        for (host, time) in seenReports.allDue() { tellSeen(host, time) }
+    }
+
+    /// `PUT /me/seen`. One that doesn't get through waits for the next newer post; the worst it does is an
+    /// extra summary.
+    private func tellSeen(_ host: String, _ time: Int64) {
+        Task { _ = try? await signedIn(host) { try await $0.setSeen(time) } }
     }
 
     /// Looks for news in the networks that aren't showing.
@@ -228,7 +293,18 @@ final class NetworkModel {
         guard let device else { throw NetworkError.notSignedIn }
         let (host, invite) = Self.parse(typed)
         guard let host else { throw NetworkError.server(status: 0, message: "Use the format server.example or CODE@server.example.") }
-        var membership = try await NetworkClient.join(host: host, device: device, invite: invite)
+        // Where this device hears from the network, once iOS lets notifications show, so a request
+        // that waits hears "You're in."
+        var target: PushTarget?
+        if let push, let token = pushToken, pushAllowed { target = try? await push.prepare(host: host, name: host, token: token) }
+        let joined: (membership: NetworkMembership, pushTaken: Bool)
+        do {
+            joined = try await NetworkClient.joinTellingPush(host: host, device: device, invite: invite, push: target)
+        } catch {
+            if let target { await push?.discard(target) }
+            throw error
+        }
+        var membership = joined.membership
         membership.farcasterPicture = avatar
         #if DEBUG
         // `-FatlineFarcasterPicture URL` stands in for a made-up demo account's Farcaster picture.
@@ -249,6 +325,24 @@ final class NetworkModel {
             result.memberCount = try? await client.members().count
         }
         try add(membership)
+        if var target {
+            if joined.pushTaken && membership.status != .refused {
+                target.name = membership.title
+                await pushWork { model in try? model.push?.keep(target) }
+            } else {
+                await push?.discard(target)
+            }
+        } else if membership.status == .approved {
+            // iOS gave the token, or let notifications show, while this join was under way: after the
+            // sync that would have told this network, so it's told now. A target kept for this host is
+            // from before this join's network key, so the network doesn't know it.
+            await pushWork { model in
+                guard let push = model.push, let token = model.pushToken, model.pushAllowed,
+                      let joined = model.memberships.first(where: { $0.host == host && $0.status == .approved }) else { return }
+                await push.stop(host, tellNetwork: false)
+                try? await push.apply(joined, token: token)
+            }
+        }
         // Behind the result, since the picture is an extra.
         if membership.status == .approved { Task { await sendFarcasterPicture(host) } }
         return result
@@ -277,6 +371,7 @@ final class NetworkModel {
             guard try update(updated) else { return }
             if updated.status == .approved {
                 await refresh()
+                await syncPush()
                 await sendFarcasterPicture(host)
             }
         } catch is CancellationError {
@@ -443,9 +538,20 @@ final class NetworkModel {
         try await signedIn { try await $0.thread(hash) }
     }
 
+    /// Activity's list, which marks it seen. iPhone's has likes in it too, which are seen by their own
+    /// time and leave the newest reply or mention, and so the tab's dot and count, as they were.
     func activity() async throws -> [NetworkActivity.Item] {
+        #if os(iOS)
+        let items = try await signedIn { try await $0.activity(likes: true) }
+        if let host = selectedHost {
+            // Zero once Activity has shown no likes, so the first like after that is new.
+            seenLikes[host] = max(seenLikes[host] ?? 0, items.filter(\.isLike).map(\.when).max() ?? 0)
+            UserDefaults.standard.set(seenLikes, forKey: Self.seenLikesKey)
+        }
+        #else
         let items = try await signedIn { try await $0.activity() }
-        if let host = selectedHost, let newest = items.first?.post.time {
+        #endif
+        if let host = selectedHost, let newest = items.first(where: { !$0.isLike })?.post.time {
             newestActivity[host] = max(newestActivity[host] ?? 0, newest)
         }
         markActivitySeen()
@@ -455,6 +561,12 @@ final class NetworkModel {
     /// How a member shows: @username, or !fid without one.
     func handle(for fid: UInt64) -> String {
         members.first { $0.fid == fid }?.handle ?? "!\(fid)"
+    }
+
+    /// How someone a network named shows, such as a liker: as a member shows, or by the name the
+    /// network sent for someone not in the list.
+    func handle(for fid: UInt64, named username: String) -> String {
+        members.first { $0.fid == fid }?.handle ?? (username.isEmpty ? "!\(fid)" : username)
     }
 
     var ownFID: UInt64? { selected?.fid }
@@ -505,8 +617,11 @@ final class NetworkModel {
     /// Posts, or replies when `parent` is set, to `host`, the network the composer opened on. Pictures
     /// go up first, then the post with up to two attachments, pictures before the link. Returns once the
     /// network has it. If another network is showing by now, nothing is sent and the draft stays, since
-    /// its mentions name the members of the network it was written for.
-    func post(to host: String, text: String, link: String? = nil, images: [NetworkImage] = [], parent: NetworkPost? = nil) async throws {
+    /// its mentions name the members of the network it was written for. `signed` gets the post as it
+    /// will read back, with its hash, once it's signed and before it goes, so a thread can show a reply
+    /// at once and the network's copy takes its place without a jump.
+    func post(to host: String, text: String, link: String? = nil, images: [NetworkImage] = [], parent: NetworkPost? = nil,
+              signed: ((NetworkPost) -> Void)? = nil) async throws {
         guard let membership = memberships.first(where: { $0.host == host }) else { throw NetworkError.notSignedIn }
         guard host == selectedHost else {
             throw NetworkError.server(status: 0, message: "This post is for \(membership.title). Switch back to it to post.")
@@ -520,12 +635,17 @@ final class NetworkModel {
         }
         let links = link.flatMap { embeds.count < NetworkMessages.maxEmbeds ? [$0] : nil } ?? []
         embeds += links.map(NetworkMessages.Embed.link)
+        let date = Date.now
         let message = try NetworkMessages.post(fid: membership.fid, text: text, handles: handles, embeds: embeds,
-                                               parent: parent.map { ($0.fid, $0.hash) }, key: membership.signingKey)
+                                               parent: parent.map { ($0.fid, $0.hash) }, key: membership.signingKey, date: date)
+        signed?(NetworkPost(hash: message.hash, fid: membership.fid, time: Int64(date.timeIntervalSince1970), text: text,
+                            mentions: [], parent: parent?.hash, parentFid: parent?.fid, embeds: [],
+                            replies: 0, likes: 0, liked: false, deleted: false))
         // The network it was signed for, even if another was chosen while pictures went up. With a
         // link, this app reads the page itself and the network reads nothing.
         try await signedIn(membership.host) { try await $0.submit(message, readsLinks: !links.isEmpty) }
-        toast = parent == nil ? "Sent" : "Replied"
+        // A reply shows in its thread, which is answer enough.
+        if parent == nil { toast = "Sent" }
         // The post is in. The composer closes now, and the feed catches up behind it, then again once
         // the link's preview is there. A preview that fails leaves the post as it is.
         Task { await refreshFeed() }
@@ -663,6 +783,8 @@ final class NetworkModel {
     /// perhaps another account's. Each network's session ends, but the networks still list this
     /// device until someone leaves them.
     func forgetEverything() {
+        if let push { Task { await pushWork { _ in await push.stopAll() } } }
+        for membership in memberships { networkGone?(membership.host) }
         Self.endSessions(memberships)
         Self.forgetAll()
         device = nil
@@ -674,17 +796,18 @@ final class NetworkModel {
     private static func forgetAll() {
         try? NetworkKeychain.memberships.remove()
         try? NetworkKeychain.device.remove()
-        for key in [selectedKey, seenPostsKey, seenActivityKey] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in [selectedKey, seenPostsKey, seenActivityKey, seenLikesKey] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
     /// What was seen in one network, or in all of them, so joining again shows no dots, as joining does.
     private func forgetSeen(_ host: String? = nil) {
-        for keyPath in [\NetworkModel.newestPost, \.newestActivity, \.seenPosts, \.seenActivity] {
+        for keyPath in [\NetworkModel.newestPost, \.newestActivity, \.seenPosts, \.seenActivity, \.seenLikes] {
             if let host { self[keyPath: keyPath][host] = nil } else { self[keyPath: keyPath] = [:] }
         }
         if let host { unseenActivity[host] = nil } else { unseenActivity = [:] }
         UserDefaults.standard.set(seenPosts, forKey: Self.seenPostsKey)
         UserDefaults.standard.set(seenActivity, forKey: Self.seenActivityKey)
+        UserDefaults.standard.set(seenLikes, forKey: Self.seenLikesKey)
     }
 
     /// Takes a network off this device, for one that refused or is gone. Its session ends, but the
@@ -695,6 +818,9 @@ final class NetworkModel {
     }
 
     private func remove(_ host: String) {
+        // Leaving or forgetting ended the session there, which took its handle off the network too.
+        if let push { Task { await pushWork { _ in await push.stop(host, tellNetwork: false) } } }
+        networkGone?(host)
         memberships.removeAll { $0.host == host }
         try? NetworkKeychain.memberships.save(memberships)
         forgetSeen(host)
@@ -707,6 +833,166 @@ final class NetworkModel {
         for membership in ending where membership.token != nil {
             Task { try? await NetworkClient(membership: membership).endSession() }
         }
+    }
+
+    // MARK: Notifications
+
+    /// Keeps each network told where this device hears from it. Only iPhone starts one so far.
+    @ObservationIgnored private(set) var push: PushRegistrar?
+    /// The device token iOS gave this launch.
+    @ObservationIgnored private var pushToken: Data?
+    /// iOS lets Fatline's notifications show. Until it does, no network is told anything.
+    @ObservationIgnored private(set) var pushAllowed = false
+    /// Push work runs one call at a time, so two never save over each other's targets.
+    @ObservationIgnored private var pushQueue: Task<Void, Never>?
+    /// A network left or forgotten on this device, for the badge.
+    @ObservationIgnored var networkGone: ((String) -> Void)?
+    /// The thread on screen, whose notifications don't show while it's open.
+    @ObservationIgnored var threadOnScreen: (host: String, hash: String)?
+
+    func startPush(store: PushRegistrar.Store) {
+        push = PushRegistrar(store: store) { [weak self] host, call in
+            guard let self else { return }
+            try await self.withClient(host) { client in
+                switch call {
+                case .set(let target): try await client.setPush(target)
+                case .remove: try await client.removePush()
+                }
+            }
+        }
+    }
+
+    /// What iOS said this launch: the device token, and whether notifications may show. Either
+    /// changing tells the networks.
+    func pushReady(token: Data?, allowed: Bool) async {
+        let changed = (token != nil && token != pushToken) || allowed != pushAllowed
+        if let token { pushToken = token }
+        pushAllowed = allowed
+        if changed { await syncPush() }
+    }
+
+    /// Every network told where this device hears from it, as each launch does.
+    func syncPush() async {
+        await pushWork { model in
+            guard let push = model.push, let token = model.pushToken, model.pushAllowed else { return }
+            await push.sync(token: token, networks: model.memberships)
+        }
+    }
+
+    func pushChoices(for host: String) -> PushChoices {
+        memberships.first { $0.host == host }?.pushChoices ?? PushChoices()
+    }
+
+    /// New choices for one network, kept with it and told to the network. A network that can't be
+    /// told keeps the choices it had.
+    func setPushChoices(_ choices: PushChoices, for host: String) async throws {
+        guard let saved = memberships.first(where: { $0.host == host }) else { return }
+        var membership = saved
+        membership.pushChoices = choices
+        guard try update(membership) else { return }
+        guard let push, pushAllowed, membership.status == .approved else { return }
+        let failure: (any Error)?? = await pushWork { model in
+            do {
+                try await push.apply(membership, token: model.pushToken)
+                return nil
+            } catch {
+                return error
+            }
+        }
+        if let failure = failure ?? nil {
+            if var current = memberships.first(where: { $0.host == host }) {
+                current.pushChoices = saved.pushChoices
+                _ = try? update(current)
+            }
+            throw failure
+        }
+    }
+
+    /// After iOS's ask, for a request that's waiting: the join again with a handle, so the network
+    /// can say "You're in." when it lets you in.
+    func pushForWaiting(_ host: String) async {
+        guard let push, let token = pushToken, pushAllowed, let device,
+              let membership = memberships.first(where: { $0.host == host && $0.status == .pending }),
+              !push.targets.contains(where: { $0.host == host }),
+              let target = try? await push.prepare(host: host, name: membership.title, token: token) else { return }
+        if (try? await NetworkClient.addPush(target, to: membership, device: device)) == true {
+            await pushWork { _ in try? push.keep(target) }
+        } else {
+            await push.discard(target)
+        }
+    }
+
+    /// For Debug's test notification: whether iOS gave this launch a device token.
+    var hasPushToken: Bool { pushToken != nil }
+
+    /// For Debug's test notification: makes sure `host` has where this device hears from it, as each
+    /// launch does, with a new handle if the relay forgot the old one. Answers the level it hears at.
+    func ensurePush(_ host: String) async throws -> PushChoices.Level {
+        guard let push else { throw PushTestProblem.noKeys }
+        guard let membership = memberships.first(where: { $0.host == host }), membership.status == .approved else { throw PushTestProblem.notIn }
+        let choices = membership.pushChoices ?? PushChoices()
+        guard choices.hearsAnything(admin: membership.isAdmin) else { throw PushTestProblem.off }
+        guard let token = pushToken else { throw PushRegistrar.Problem.noToken }
+        let failure: (any Error)?? = await pushWork { _ in
+            do {
+                try await push.apply(membership, token: token, refresh: true)
+                return nil
+            } catch {
+                return error
+            }
+        }
+        if let failure = failure ?? nil { throw failure }
+        return choices.level
+    }
+
+    /// Runs `work` after any push work before it.
+    @discardableResult
+    private func pushWork<Value: Sendable>(_ work: @escaping @MainActor (NetworkModel) async -> Value) async -> Value? {
+        let previous = pushQueue
+        let task = Task<Value?, Never> { [weak self] in
+            await previous?.value
+            guard let self else { return nil }
+            return await work(self)
+        }
+        pushQueue = Task { _ = await task.value }
+        return await task.value
+    }
+
+    // MARK: Opening from a notification
+
+    /// A tapped notification's screen, in its network.
+    struct NotificationOpening: Equatable, Hashable, Sendable {
+        let host: String
+        let target: PushTap.Target
+    }
+
+    /// The screen a tapped notification asked for, until its network's screen opens it.
+    private(set) var notificationOpening: NotificationOpening?
+
+    /// Shows the notification's network and asks its screen to open the right place. False when this
+    /// device isn't in that network any more.
+    @discardableResult
+    func open(_ tap: PushTap) -> Bool {
+        guard let membership = memberships.first(where: { $0.host == tap.host }) else { return false }
+        select(tap.host)
+        notificationOpening = NotificationOpening(host: tap.host, target: tap.target)
+        // "You're in." arrived before this device asked again.
+        if membership.status == .pending { Task { await checkAgain(tap.host) } }
+        return true
+    }
+
+    func notificationOpening(in host: String) -> NotificationOpening? {
+        notificationOpening?.host == host ? notificationOpening : nil
+    }
+
+    func notificationOpened(_ opening: NotificationOpening) {
+        if notificationOpening == opening { notificationOpening = nil }
+    }
+
+    /// Whether a notification is about the thread on screen, so it needn't show.
+    func isShowing(_ tap: PushTap) -> Bool {
+        guard let thread = tap.thread, let showing = threadOnScreen else { return false }
+        return showing.host == tap.host && showing.hash == thread && selectedHost == tap.host
     }
 
     // MARK: Plumbing

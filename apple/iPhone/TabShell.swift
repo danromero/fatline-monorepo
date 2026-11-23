@@ -212,6 +212,8 @@ struct SettingsRow: View {
     /// Nil leaves the trailing symbol out, for a row that acts in place.
     var trailing: String? = "chevron.right"
     var color = FatlineStyle.ink
+    /// The ink for a choice's check; secondary for a chevron or an arrow.
+    var trailingColor = FatlineStyle.secondary
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -238,7 +240,7 @@ struct SettingsRow: View {
             if let trailing {
                 Image(systemName: trailing)
                     .font(FatlineStyle.metaStrong)
-                    .foregroundStyle(FatlineStyle.secondary)
+                    .foregroundStyle(trailingColor)
                     .accessibilityHidden(true)
             }
         }

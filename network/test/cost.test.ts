@@ -76,6 +76,7 @@ describe("what each route costs", () => {
     within(await cost(await api(owner, "GET", "/feed")), { read: 10, written: 0 }, "the feed again, from the cache");
     within(await cost(await api(owner, "GET", "/feed?replies=1")), { read: 220, written: 6 }, "the feed with replies");
     within(await cost(await api(owner, "GET", "/activity")), { read: 400, written: 4 }, "activity");
+    within(await cost(await api(owner, "GET", "/activity?likes=1")), { read: 480, written: 4 }, "activity with likes");
     within(await cost(await api(owner, "GET", `/posts/${root}`)), { read: 600, written: 4 }, "a thread's first page of 200");
     within(await cost(await api(owner, "GET", "/members")), { read: 60, written: 0 }, "the member list");
     within(await cost(await api(owner, "GET", "/network")), { read: 15, written: 0 }, "the network");

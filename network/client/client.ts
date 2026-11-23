@@ -1,5 +1,6 @@
 import type {
-  ActivityPage, FeedPage, JoinRequest, JoinStatus, LinkPreview, Member, NetworkInfo, ProfileChange, Session, SessionRequest, Thread, UploadedImage,
+  ActivityPage, FeedPage, JoinRequest, JoinStatus, LinkPreview, Member, NetworkInfo, ProfileChange, PushSettings, PushTarget, Session, SessionRequest, TestPushResult, Thread,
+  UploadedImage,
 } from "../src/protocol/api.ts";
 import { networkOrigin } from "../src/protocol/approvals.ts";
 import { makeLike, makePost, makeRemoval, makeUnlike } from "../src/protocol/messages.ts";
@@ -59,7 +60,7 @@ export class NetworkClient {
     return this.identity.fid;
   }
 
-  joinRequest(options: { invite?: string; avatar?: string } = {}): JoinRequest {
+  joinRequest(options: { invite?: string; avatar?: string; push?: PushTarget } = {}): JoinRequest {
     return {
       fid: this.fid,
       deviceKey: toHex(this.identity.device.publicKey),
@@ -68,10 +69,12 @@ export class NetworkClient {
       networkApproval: this.membership.approval,
       ...(options.invite ? { invite: options.invite } : {}),
       ...(options.avatar ? { avatar: options.avatar } : {}),
+      ...(options.push ? { push: options.push } : {}),
     };
   }
 
-  async join(options: { invite?: string; avatar?: string } = {}): Promise<JoinStatus> {
+  /** With `push`, this device also hears from the network, which is how a waiting request hears "You're in". */
+  async join(options: { invite?: string; avatar?: string; push?: PushTarget } = {}): Promise<JoinStatus> {
     const answer = await this.request<{ status: JoinStatus }>("POST", "/join", { json: this.joinRequest(options), signedIn: false });
     return answer.status;
   }
@@ -142,8 +145,9 @@ export class NetworkClient {
     return this.request<Thread>("GET", `/posts/${hash}`);
   }
 
-  activity(cursor?: string) {
-    return this.request<ActivityPage>("GET", "/activity" + query({ cursor }));
+  /** Replies and mentions, or with `likes` likes on this person's posts too. */
+  activity(cursor?: string, options: { likes?: boolean } = {}) {
+    return this.request<ActivityPage>("GET", "/activity" + query({ cursor, likes: options.likes ? "1" : undefined }));
   }
 
   async members() {
@@ -152,6 +156,25 @@ export class NetworkClient {
 
   updateProfile(change: ProfileChange) {
     return this.request<Member>("PATCH", "/me", { json: change });
+  }
+
+  /** Where and what this device hears from the network. */
+  async setPush(settings: PushSettings) {
+    await this.request("PUT", "/me/push", { json: settings });
+  }
+
+  async removePush() {
+    await this.request("DELETE", "/me/push");
+  }
+
+  /** A test notification to this device, sent at once, and what the relay said of it. */
+  async testPush() {
+    return this.request<TestPushResult>("POST", "/me/push/test");
+  }
+
+  /** The newest post this member has had on screen, by its time, so twice-a-day summaries leave it out. */
+  async setSeen(time: number) {
+    await this.request("PUT", "/me/seen", { json: { time } });
   }
 
   async mute(fid: number) {

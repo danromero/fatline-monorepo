@@ -10,6 +10,35 @@ export interface JoinRequest {
   networkApproval: { issued: number; signature: string };
   invite?: string;
   avatar?: string;
+  push?: PushTarget;
+}
+
+/**
+ * Where a device hears from a network: a relay this network lists, its handle there, the 32-byte key
+ * notes are sealed with, as hex, and the time zone its twice-a-day summaries follow.
+ */
+export interface PushTarget {
+  relay: string;
+  handle: string;
+  key: string;
+  tz?: string;
+}
+
+/**
+ * `PUT /me/push`. Unless given, a device hears new posts twice a day and replies and mentions at once,
+ * and the admin also join requests and reports.
+ */
+export interface PushSettings extends PushTarget {
+  level?: "digest" | "all" | "replies" | "off";
+  requests?: boolean;
+  reports?: boolean;
+}
+
+/** `POST /me/push/test`: what the relay said of the test note. */
+export interface TestPushResult {
+  result: "sent" | "gone" | "failed";
+  /** The relay's reason, such as `BadDeviceToken`, or `relay-<status>` and `relay-unreachable`. */
+  reason?: string;
 }
 
 export interface SessionRequest {
@@ -85,12 +114,33 @@ export interface Thread {
   replies: Post[];
 }
 
-export interface ActivityItem {
+/** A reply to one of your posts, or a post that mentions you. */
+export interface PostActivity {
   kind: "reply" | "mention";
   post: Post;
   /** For a reply, the post it answers, without its embeds. */
   parent: Post | null;
 }
+
+/**
+ * Likes on one of your posts, with `likes=1`: one item a post, placed by its newest like. Your own like
+ * and likes from people you muted don't count.
+ */
+export interface LikeActivity {
+  kind: "like";
+  /** The post that was liked, one of yours. */
+  post: Post;
+  /** For a reply, the post it answers, without its embeds. */
+  parent: Post | null;
+  /** The newest likers, newest first, up to 3. */
+  likers: { fid: number; username: string }[];
+  /** How many people liked it. */
+  count: number;
+  /** When the newest like was made. */
+  time: number;
+}
+
+export type ActivityItem = PostActivity | LikeActivity;
 
 export interface ActivityPage {
   items: ActivityItem[];

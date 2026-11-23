@@ -11,7 +11,9 @@ struct NetworkComposerSheet: View {
     @State private var text = ""
     @State private var images: [NetworkImage] = []
     @State private var removedLinks: Set<URL> = []
-    @State private var preview: LinkPreview?
+    /// The link card's title and description, with the link they were read for, so a card never shows
+    /// another link's words while a new one loads.
+    @State private var preview: (link: URL, read: LinkPreview?)?
     @State private var sending = false
     @State private var failure: String?
     @State private var choosing = false
@@ -19,9 +21,15 @@ struct NetworkComposerSheet: View {
     @State private var pasteMonitor: Any?
     /// The network the sheet opened on, which the post goes to whatever is showing later.
     @State private var host: String?
+    /// The saved draft has been read, so saving won't write over it.
+    @State private var loaded = false
+    /// The post is in, so closing doesn't save its text again.
+    @State private var posted = false
     @FocusState private var focused: Bool
 
     private var destination: NetworkMembership? { state.networks.memberships.first { $0.host == host } }
+    /// The draft is kept per network, as on iPhone, so closing the sheet doesn't lose it.
+    private var drafts: DraftStore? { host.map { NetworkDrafts.store(for: $0) } }
 
     private var count: Int { NetworkMessages.characterCount(text) }
     /// The link card shows while there's room for it beside the pictures.
@@ -136,10 +144,21 @@ struct NetworkComposerSheet: View {
         .tint(FatlineStyle.action)
         .onAppear {
             if host == nil { host = state.networks.selectedHost }
+            if !loaded {
+                text = (try? drafts?.load()) ?? ""
+                loaded = true
+            }
             focused = true
             pasteMonitor = watchPaste()
         }
+        .task(id: text) {
+            // A change to the text cancels this wait, so a save happens once typing pauses.
+            do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
+            saveDraft()
+        }
+        // Cancel, Escape, and closing the window keep the draft.
         .onDisappear {
+            saveDraft()
             if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
         }
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
@@ -167,10 +186,11 @@ struct NetworkComposerSheet: View {
                     }
             }
             if let link {
-                LinkCard(url: link, preview: preview, height: images.isEmpty ? nil : Self.thumbnailSide) { removedLinks.insert(link) }
+                LinkCard(url: link, preview: preview?.link == link ? preview?.read : nil,
+                         height: images.isEmpty ? nil : Self.thumbnailSide) { removedLinks.insert(link) }
                     .task(id: link) {
-                        preview = nil
-                        preview = await LinkPreview.load(link)
+                        let read = await LinkPreview.load(link)
+                        if !Task.isCancelled { preview = (link, read) }
                     }
             }
         }
@@ -242,12 +262,19 @@ struct NetworkComposerSheet: View {
         Task {
             do {
                 try await state.networks.post(to: host, text: text, link: link?.absoluteString, images: images)
+                posted = true
+                try? drafts?.save("")
                 dismiss()
             } catch {
                 failure = error.localizedDescription
             }
             sending = false
         }
+    }
+
+    private func saveDraft() {
+        guard loaded, !posted else { return }
+        try? drafts?.save(text)
     }
 }
 

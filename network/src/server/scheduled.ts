@@ -5,12 +5,14 @@ import { hubURL, refreshFollows } from "./follows.ts";
 import { custody, revokeOtherCustody, username } from "./identity.ts";
 import { settings } from "./store.ts";
 import { oldCounts } from "./daily.ts";
+import { sendDigests } from "./push.ts";
 
 const DAY = 24 * 60 * 60;
 const RETENTION = 30 * DAY;
 /**
- * Requests to other servers a run may make. Workers on the free plan get 50. The daily pull of the
- * admin's follows comes out of it first, a request a page, and members are checked with the rest.
+ * Requests to other servers a run may make. Workers on the free plan get 50. Twice-a-day summaries come
+ * out of it first, at most 8 calls to relays, then the daily pull of the admin's follows, a request a
+ * page and at most 40, and members are checked with the rest.
  */
 const FETCHES_PER_RUN = 48;
 /** Checking a member: two requests to Optimism RPCs that must agree, and two to the fname server. */
@@ -23,8 +25,12 @@ const CHECKS_PER_RUN = FETCHES_PER_RUN / MEMBER_FETCHES;
 /** Runs every hour. */
 export async function hourly(context: Context) {
   await expire(context);
+  const digests = await sendDigests(context).catch((error) => {
+    console.error("summaries failed", String(error));
+    return 0;
+  });
   const pulling = await refreshFollows(context);
-  await checkMembers(context, FETCHES_PER_RUN - pulling);
+  await checkMembers(context, FETCHES_PER_RUN - digests - pulling);
   await context.db.batch([
     context.db.prepare("DELETE FROM used_signatures WHERE expires < ?").bind(context.now),
     context.db.prepare("DELETE FROM sessions WHERE expires < ?").bind(context.now),

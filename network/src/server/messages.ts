@@ -7,6 +7,7 @@ import { deletionStatements } from "./deletion.ts";
 import { collect, fetchPreviews } from "./media.ts";
 import type { Context, Viewer } from "./env.ts";
 import { badRequest, base64, HttpError, json, notFound, readBytes, refused } from "./http.ts";
+import { notifyPost } from "./push.ts";
 import { usernames } from "./store.ts";
 import { checkDaily, countDaily } from "./daily.ts";
 import { allBytesOf, bytesOf, integerOf, Malformed, onlyFields, packed, readFields, safeNumber, sameBytes, utf8 } from "./wire.ts";
@@ -158,9 +159,8 @@ async function addPost(context: Context, message: Checked, readLinks: boolean): 
 
   const names = await usernames(context);
   for (const fid of mentioned) if (!names.has(fid)) throw badRequest("You can only mention members of this network.");
-  if (characterCount(joinMentions({ text, fids: mentioned, positions }, names)) > MAX_CHARACTERS) {
-    throw badRequest("That post is over 280 characters.");
-  }
+  const shown = joinMentions({ text, fids: mentioned, positions }, names);
+  if (characterCount(shown) > MAX_CHARACTERS) throw badRequest("That post is over 280 characters.");
 
   const embeds: StoredEmbed[] = [];
   for (const embedBytes of embedFields) embeds.push(await embed(context, message.fid, embedBytes));
@@ -191,9 +191,16 @@ async function addPost(context: Context, message: Checked, readLinks: boolean): 
   ]);
   // Removed, or signed out everywhere, while this was being checked: nothing went in.
   if (written[0]!.meta.changes === 0 && !(await context.db.prepare("SELECT 1 FROM posts WHERE hash = ?").bind(message.hash).first())) throw refused();
+  const added = written[0]!.meta.changes > 0;
   const links = embeds.flatMap((item) => (item.kind === "link" ? [item.url] : []));
   if (links.length && readLinks) context.waitUntil(fetchPreviews(context, links, message.fid).catch((error) => console.error("previews failed", String(error))));
-  return written[0]!.meta.changes > 0;
+  if (added) {
+    notifyPost(context, {
+      fid: message.fid, hash: message.hash, parent: parent?.hash ?? null, parentFid: parent?.fid ?? null, text: shown, mentioned: mentionRows,
+      pictures: embeds.filter((item) => item.kind === "image").length, names,
+    });
+  }
+  return added;
 }
 
 async function embed(context: Context, fid: number, bytes: Uint8Array): Promise<StoredEmbed> {
@@ -264,7 +271,8 @@ async function react(context: Context, message: Checked, add: boolean): Promise<
   const row = await context.db.prepare("SELECT fid FROM posts WHERE hash = ? AND deleted IS NULL").bind(target.hash).first<{ fid: number }>();
   if (!row || row.fid !== target.fid) throw badRequest("The post you're liking isn't here.");
   return (await context.db
-    .prepare(`INSERT INTO likes (post, fid, time, message) SELECT ?1, ?2, ?3, ?4 WHERE ${STILL_SIGNING.replaceAll("?10", "?5")} ON CONFLICT (post, fid) DO NOTHING`)
-    .bind(target.hash, message.fid, message.time, base64(message.bytes), message.signer)
+    .prepare(`INSERT INTO likes (post, fid, time, message, post_fid) SELECT ?1, ?2, ?3, ?4, ?6 WHERE ${STILL_SIGNING.replaceAll("?10", "?5")}
+      ON CONFLICT (post, fid) DO NOTHING`)
+    .bind(target.hash, message.fid, message.time, base64(message.bytes), message.signer, row.fid)
     .run()).meta.changes > 0;
 }

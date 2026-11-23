@@ -26,7 +26,7 @@ Fatline is an opinionated client. On Farcaster, these aren't in it, and there ar
 - Follow and unfollow
 - Interacting with people you don't already follow
 
-If you want any of that, use another client or fork this one. Private networks are the exception: everyone in one knows each other, so posts there have replies and likes.
+If you want any of that, use another client or fork this one. Private networks are the exception: everyone in one knows each other, so posts there have replies and likes, and the iPhone app has notifications for them.
 
 ## Connecting
 
@@ -44,7 +44,7 @@ Anyone can run either kind of server. To set up a custom server, give a coding a
 
 A network is a small private social network on one server: everyone in it can read everyone else, and nobody outside can read anything. People join with their Farcaster account, and the admin decides who gets in, by invite code, by request, or because the admin follows them on Farcaster. Posts, replies, and likes stay on the network and never reach Farcaster. In the Mac and iPhone apps, Add Network takes a network's address or an invite code.
 
-Joining asks for your recovery phrase once per device, to approve a key for that device, and the network checks with Farcaster's ID registry that the phrase owns your FID. Whoever runs a network's server can read everything posted there. [docs/NETWORK.md](docs/NETWORK.md) is the spec, written so anyone can build a client or a server against it, and [`network`](network) is a server that follows it. To set up your own, give a coding agent [this guide](network/SETUP.md).
+Joining asks for your recovery phrase once per device, to approve a key for that device, and the network checks with Farcaster's ID registry that the phrase owns your FID. Whoever runs a network's server can read everything posted there. On iPhone, a network can send notifications: new posts, replies, mentions, and for its admin, join requests and reports. Each note is sealed for one device with a key that device made, and passes through Fatline's relay at push.fatline.tech, which can't read it; the iPhone writes the words. The [Notifications section](docs/NETWORK.md#notifications) of the spec has the details. [docs/NETWORK.md](docs/NETWORK.md) is the spec, written so anyone can build a client or a server against it, and [`network`](network) is a server that follows it. To set up your own, give a coding agent [this guide](network/SETUP.md).
 
 ## Your keys
 

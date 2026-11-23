@@ -148,6 +148,37 @@ final class FatlineTests: XCTestCase {
     }
 
     @MainActor
+    func testStartOverFromAStuckSetup() {
+        let app = XCUIApplication()
+        // A made-up account under its own profile, so the Simulator's own sign-in is never touched.
+        app.launchArguments += ["-FatlineProfile", "start-over-test", "-FatlineSeedStuckAccount", "YES"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Connect to Farcaster"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["connection-signed-in"].label.contains("stuck-test"))
+        attachScreenshot("Stuck Setup", app: app)
+
+        let back = app.buttons["connection-start-over"]
+        back.tap()
+        XCTAssertTrue(app.staticTexts["Start over?"].waitForExistence(timeout: 5))
+        attachScreenshot("Start Over Dialog", app: app)
+        // Cancel keeps the screen. A dialog drawn as a popover has no Cancel: a tap outside dismisses it.
+        if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap() }
+        XCTAssertTrue(app.staticTexts["Connect to Farcaster"].waitForExistence(timeout: 5))
+
+        back.tap()
+        app.buttons["Start Over"].tap()
+        XCTAssertTrue(app.buttons["welcome-continue"].waitForExistence(timeout: 5))
+        app.terminate()
+
+        // Really forgotten: the same profile without the seed opens on Welcome.
+        let again = XCUIApplication()
+        again.launchArguments += ["-FatlineProfile", "start-over-test"]
+        again.launch()
+        XCTAssertTrue(again.buttons["welcome-continue"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     private func attachScreenshot(_ name: String, app: XCUIApplication) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name

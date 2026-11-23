@@ -114,6 +114,7 @@ describe("the feed version", () => {
       return version() !== before;
     };
     assert.ok(moves(() => run("INSERT INTO likes (post, fid, time, message) VALUES ('p1', 7, 1000, '')")));
+    assert.ok(moves(() => run("DELETE FROM likes WHERE post = 'p1' AND fid = 7")), "and so does taking a like back");
     assert.ok(moves(() => post("r1", [], "p1")));
     assert.ok(moves(() => run("INSERT INTO link_previews (url, fetched) VALUES ('https://x.example/', 1000)")));
     assert.ok(moves(() => run("UPDATE members SET username = 'new' WHERE fid = 7")));
@@ -139,5 +140,24 @@ describe("the migration that added them", () => {
     assert.equal(one("SELECT 1 FROM link_previews WHERE url = 'https://gone.example/'"), undefined, "a preview no post has goes");
     assert.equal(one("SELECT 1 FROM settings WHERE key = 'posts_indexed'"), undefined);
     assert.ok(version() % 2 === 0 && version() > 5, "every old tag stops matching");
+  });
+});
+
+describe("a like's post author", () => {
+  test("comes from its post for likes already here, and for likes an older deploy writes", () => {
+    db = new DatabaseSync(":memory:");
+    const added = MIGRATIONS.findIndex((migration) => migration.some((sql) => sql.includes("likes ADD COLUMN post_fid")));
+    for (const sql of MIGRATIONS.slice(0, added).flat()) db.exec(sql);
+    run("INSERT INTO members (fid, custody, joined, checked) VALUES (7, '0x', 1000, 1000)");
+    post("p1", []);
+    run("INSERT INTO likes (post, fid, time, message) VALUES ('p1', 8, 1000, '')");
+
+    for (const sql of MIGRATIONS.slice(added).flat()) db.exec(sql);
+    const author = (fid: number) => one<{ post_fid: number | null }>("SELECT post_fid FROM likes WHERE post = 'p1' AND fid = ?", fid).post_fid;
+    assert.equal(author(8), 7, "a like from before the migration");
+    run("INSERT INTO likes (post, fid, time, message) VALUES ('p1', 9, 1000, '')");
+    assert.equal(author(9), 7, "a like written without it");
+    run("INSERT INTO likes (post, fid, time, message, post_fid) VALUES ('p1', 10, 1000, '', 7)");
+    assert.equal(author(10), 7, "a like written with it");
   });
 });
